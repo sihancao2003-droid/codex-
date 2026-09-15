@@ -76,9 +76,11 @@ body.press { transform: scaleY(.92); transition-duration: 70ms; }
 
 .menu {
   position: absolute;
-  right: 39%;
-  bottom: 9%;
-  width: min(178px, 55%);
+  right: 33%;
+  bottom: 6px;
+  width: min(190px, 58%);
+  max-height: calc(100% - 12px);
+  overflow-y: auto;
   padding: 10px;
   color: var(--ink);
   background: rgba(255,255,255,.96);
@@ -91,16 +93,26 @@ body.press { transform: scaleY(.92); transition-duration: 70ms; }
   transform-origin: right bottom;
   transition: 130ms ease;
   font-size: 11px;
-  z-index: 5;
+  z-index: 20;
 }
 .menu.open { opacity: 1; visibility: visible; transform: translateY(0) scale(1); }
 .widget.dragging .menu { opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; }
 .widget.dragging .pet { cursor: grabbing; animation-play-state: paused; }
 .menu-row { min-height: 24px; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.menu select { max-width: 86px; border: 1px solid #a7afd0; border-radius: 6px; color: var(--ink); font: inherit; }
-.menu input[type="range"] { width: 77px; accent-color: var(--ink); }
+.menu-row > span { white-space: nowrap; }
+.menu select { width: min(86px, 55%); border: 1px solid #a7afd0; border-radius: 6px; color: var(--ink); font: inherit; }
+.menu input[type="range"] { width: min(77px, 55%); accent-color: var(--ink); }
 .menu button { width: 100%; margin-top: 5px; border: 1px solid var(--ink); border-radius: 7px; background: #f8f9ff; color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; }
 .menu button:hover { background: #e9edff; }
+
+@media (max-width: 220px), (max-height: 220px) {
+  .menu {
+    right: 6px;
+    bottom: 10px;
+    width: calc(100% - 12px);
+    max-height: calc(100% - 16px);
+  }
+}
 
 .egg-editor {
   display: none;

@@ -61,11 +61,34 @@ let pressTimer = null;
 let dragSafetyTimer = null;
 let visualLockUntil = 0;
 let touchGesture = null;
+let turnBaseline = null;
+let completionState = null;
 
 function remaining(windowValue) {
   return windowValue && Number.isFinite(windowValue.remainingPercent)
     ? Math.round(windowValue.remainingPercent)
     : null;
+}
+
+function usageSnapshot(value) {
+  return {
+    primaryRemaining: remaining(value?.primary),
+    secondaryRemaining: remaining(value?.secondary),
+    todayTokens: Number.isFinite(value?.todayTokens) ? value.todayTokens : null
+  };
+}
+
+function formatTokens(value) {
+  if (!Number.isFinite(value)) return null;
+  if (value >= 1000000) return `${(value / 1000000).toFixed(value >= 10000000 ? 0 : 1)}M`;
+  if (value >= 1000) return `${(value / 1000).toFixed(value >= 100000 ? 0 : 1)}K`;
+  return String(Math.round(value));
+}
+
+function consumedPercent(before, after) {
+  if (!Number.isFinite(before.primaryRemaining) || !Number.isFinite(after.primaryRemaining)) return null;
+  const delta = Math.round((before.primaryRemaining - after.primaryRemaining) * 10) / 10;
+  return delta > 0 ? delta : null;
 }
 
 function resetText(windowValue) {
@@ -81,6 +104,7 @@ function resetText(windowValue) {
 function hideBubble() {
   clearTimeout(bubbleTimer);
   viewMode = 'idle';
+  completionState = null;
   bubble.classList.remove('open', 'egg');
   amount.classList.remove('warn', 'danger');
 }
@@ -203,6 +227,61 @@ function showMessage(title, value, sub, duration = 3200) {
   if (duration > 0) bubbleTimer = setTimeout(hideBubble, duration);
 }
 
+function tokenCountFromEvent(value) {
+  const candidates = [
+    value?.usage,
+    value?.tokenUsage,
+    value?.token_usage,
+    value?.turn?.usage,
+    value?.turn?.tokenUsage,
+    value?.turn?.token_usage
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const total = candidate.totalTokens ?? candidate.total_tokens ?? candidate.tokens;
+    if (Number.isFinite(total) && total >= 0) return Math.round(total);
+    const input = candidate.inputTokens ?? candidate.input_tokens;
+    const output = candidate.outputTokens ?? candidate.output_tokens;
+    if (Number.isFinite(input) && Number.isFinite(output) && input >= 0 && output >= 0) {
+      return Math.round(input + output);
+    }
+  }
+  return null;
+}
+
+function renderCompletionUsage(state) {
+  const after = usageSnapshot(usage);
+  const percent = consumedPercent(state.before, after);
+  const tokenDelta = Number.isFinite(state.before.todayTokens) && Number.isFinite(after.todayTokens)
+    ? Math.max(0, after.todayTokens - state.before.todayTokens)
+    : null;
+  const tokenText = state.eventTokens != null
+    ? `本轮 ${formatTokens(state.eventTokens)} tokens`
+    : tokenDelta != null && tokenDelta > 0
+    ? `本轮约 ${formatTokens(tokenDelta)} tokens`
+    : after.todayTokens != null
+      ? `今日 ${formatTokens(after.todayTokens)} tokens`
+      : 'token 计数暂不可用';
+  showMessage(
+    '任务结束 · 5小时剩余',
+    after.primaryRemaining != null ? `${after.primaryRemaining}%` : '--%',
+    `${percent != null ? `本轮 -${percent}% · ` : ''}${tokenText}`,
+    6500
+  );
+}
+
+function showCompletionUsage(event) {
+  completionState = {
+    before: turnBaseline || usageSnapshot(usage),
+    eventTokens: tokenCountFromEvent(event)
+  };
+  turnBaseline = null;
+  // Do not wait for App Server: it can occasionally take several seconds to
+  // update rate-limit data. The main process refreshes in the background and
+  // onUsage below redraws this same message when fresher values arrive.
+  renderCompletionUsage(completionState);
+}
+
 function showPrimaryAllowance() {
   clearTimeout(bubbleTimer);
   renderAllowance('primary');
@@ -215,19 +294,22 @@ function eventName(value) {
 function handleCodexEvent(value) {
   const name = eventName(value);
   if (name === 'UserPromptSubmit') {
+    completionState = null;
+    turnBaseline = usageSnapshot(usage);
     showMessage('Codex', '工作中…', '鲸鱼正在帮你处理任务', 2600);
     play('duckPress');
   } else if (name === 'PermissionRequest') {
     showMessage('Codex', '请确认', '任务正在等待你的操作', 0);
     play('duckRelease');
   } else if (name === 'PreToolUse') {
+    if (!turnBaseline) turnBaseline = usageSnapshot(usage);
     document.body.classList.add('press');
     clearTimeout(pressTimer);
     pressTimer = setTimeout(() => document.body.classList.remove('press'), 130);
   } else if (name === 'Stop') {
-    if (preferences.notifyOnStop !== false) showMessage('任务完成', '完成啦', '摸摸头查看剩余用量', 4200);
+    if (preferences.notifyOnStop !== false) showCompletionUsage(value);
+    else api.refreshUsage();
     play('fx1Press');
-    setTimeout(() => api.refreshUsage(), 450);
   } else if (name === 'Interrupt') {
     showMessage('Codex', '已停止', '任务已被中断', 3200);
     play('fx1Release');
@@ -394,7 +476,8 @@ document.getElementById('quit').addEventListener('click', () => api.quit());
 
 api.onUsage((value) => {
   usage = value;
-  if (viewMode === 'primary' || viewMode === 'secondary') renderAllowance(viewMode);
+  if (completionState && viewMode === 'message') renderCompletionUsage(completionState);
+  else if (viewMode === 'primary' || viewMode === 'secondary') renderAllowance(viewMode);
 });
 api.onCodexEvent(handleCodexEvent);
 api.onSide((side) => {

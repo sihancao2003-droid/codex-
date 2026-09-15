@@ -295,6 +295,27 @@ function createWindow() {
               const secondaryVisibleAfterEgg = await win.webContents.executeJavaScript(
                 "document.getElementById('label').textContent === 'Codex · 每周'"
               );
+              const completionUsageIsImmediate = await win.webContents.executeJavaScript(
+                "usage = { primary: { remainingPercent: 42 }, secondary: null, todayTokens: null }; turnBaseline = { primaryRemaining: 44, secondaryRemaining: null, todayTokens: null }; showCompletionUsage({ usage: { total_tokens: 12345 } }); ({ label: document.getElementById('label').textContent, amount: document.getElementById('amount').textContent, detail: document.getElementById('detail').textContent, open: document.getElementById('bubble').classList.contains('open') })"
+              );
+              const completionUsageShowsPercentAndTokens = completionUsageIsImmediate.open &&
+                completionUsageIsImmediate.label === '任务结束 · 5小时剩余' &&
+                completionUsageIsImmediate.amount === '42%' &&
+                completionUsageIsImmediate.detail.includes('本轮 -2%') &&
+                completionUsageIsImmediate.detail.includes('12.3K tokens');
+              await win.webContents.executeJavaScript('hideBubble()');
+              const originalBounds = win.getBounds();
+              win.setBounds({ ...originalBounds, width: 152, height: 152 }, true);
+              await new Promise((resolve) => setTimeout(resolve, 180));
+              const compactMenuGeometry = await win.webContents.executeJavaScript(
+                "document.getElementById('menu').classList.add('open'); const menuRect = document.getElementById('menu').getBoundingClientRect(); const scaleRect = document.getElementById('scale').getBoundingClientRect(); ({ menu: { top: menuRect.top, left: menuRect.left, right: menuRect.right, bottom: menuRect.bottom }, scaleTop: scaleRect.top, viewport: { width: window.innerWidth, height: window.innerHeight } })"
+              );
+              const compactMenuKeepsSizeControlVisible = compactMenuGeometry.menu.top >= 0 &&
+                compactMenuGeometry.menu.left >= 0 &&
+                compactMenuGeometry.menu.right <= compactMenuGeometry.viewport.width &&
+                compactMenuGeometry.menu.bottom <= compactMenuGeometry.viewport.height &&
+                compactMenuGeometry.scaleTop >= compactMenuGeometry.menu.top;
+              win.setBounds(originalBounds, true);
               const result = {
                 visualSizeStable: visualBefore.width === visualAfter.width && visualBefore.height === visualAfter.height,
                 longPressDidNotResize:
@@ -320,6 +341,10 @@ function createWindow() {
                 touchSoundSelectionSaved,
                 eggVisibleOnSecondClick,
                 secondaryVisibleAfterEgg,
+                completionUsageShowsPercentAndTokens,
+                completionUsageIsImmediate,
+                compactMenuKeepsSizeControlVisible,
+                compactMenuGeometry,
                 visualBefore,
                 visualAfterLongPress,
                 visualAfter,
@@ -448,8 +473,11 @@ class CodexUsageClient {
 
   async refresh() {
     if (!this.initialized) return null;
-    const result = await this.request('account/rateLimits/read', {});
-    const normalized = normalizeUsage(result);
+    const [result, accountUsage] = await Promise.all([
+      this.request('account/rateLimits/read', {}),
+      this.request('account/usage/read', {}).catch(() => null)
+    ]);
+    const normalized = normalizeUsage(result, accountUsage);
     this.onUsage(normalized);
     return normalized;
   }
@@ -471,12 +499,25 @@ function normalizeWindow(value) {
   };
 }
 
-function normalizeUsage(result) {
+function todayDateStamp() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function normalizeTodayTokens(result) {
+  const buckets = result?.dailyUsageBuckets;
+  if (!Array.isArray(buckets)) return null;
+  const today = buckets.find((bucket) => bucket?.startDate === todayDateStamp());
+  return Number.isFinite(today?.tokens) && today.tokens >= 0 ? Math.round(today.tokens) : null;
+}
+
+function normalizeUsage(result, accountUsage = null) {
   const byId = result?.rateLimitsByLimitId;
   const bucket = (byId && (byId.codex || Object.values(byId)[0])) || result?.rateLimits || {};
   return {
     primary: normalizeWindow(bucket.primary),
     secondary: normalizeWindow(bucket.secondary),
+    todayTokens: normalizeTodayTokens(accountUsage),
     planType: bucket.planType || result?.rateLimits?.planType || null,
     ordinaryUsageAllowed: result?.ordinaryUsageAllowed ?? null,
     fetchedAt: Date.now()
@@ -593,7 +634,7 @@ ipcMain.on('whale:drag-end', () => {
 });
 ipcMain.on('whale:quit', () => app.quit());
 
-if (!app.requestSingleInstanceLock()) {
+if (!dragTestPath && !app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
