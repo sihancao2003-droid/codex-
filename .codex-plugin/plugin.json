@@ -1,0 +1,21 @@
+{
+  "name": "codex-whale-widget",
+  "version": "0.1.1+codex.20260914154954",
+  "description": "A transparent desktop whale that mirrors Codex task state and remaining subscription usage.",
+  "author": {
+    "name": "Local developer"
+  },
+  "interface": {
+    "displayName": "Codex Whale Widget",
+    "shortDescription": "Codex usage and task state as the original whale widget.",
+    "longDescription": "Keeps the original DeepSeek Balance Whale character, speech-bubble geometry, sounds, drag behavior and animations while listening to Codex hooks and showing the remaining five-hour and weekly subscription allowance.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [
+      "Hooks",
+      "Desktop overlay",
+      "Codex usage"
+    ],
+    "defaultPrompt": "Show me how to configure or troubleshoot Codex Whale Widget."
+  }
+}
