@@ -3,94 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' data:; media-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
   <title>Codex Whale Widget</title>
-  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main id="widget" class="widget right" aria-label="Codex Whale Widget">
-    <section id="bubble" class="bubble interactive" aria-live="polite">
-      <svg class="bubble-shape" viewBox="0 0 1026 700" aria-hidden="true">
-        <path d="M827 248A373 232 0 1 0 81 246a373 232 0 0 0 220 219 57 32 10 0 0 112 19 373 232 0 0 0 414-236Z"/>
-        <ellipse cx="352" cy="561" rx="37.5" ry="26"/>
-        <ellipse cx="442" cy="646" rx="24.5" ry="18"/>
-      </svg>
-      <div class="bubble-content unmirror">
-        <div id="label" class="label">剩余额度</div>
-        <div id="amount" class="amount">--%</div>
-        <div id="detail" class="detail">正在读取套餐用量…</div>
-      </div>
-    </section>
-
-    <img id="pet" class="pet interactive" src="../assets/DSniang1.png" alt="DeepSeek 鲸鱼娘">
-
-    <section id="menu" class="menu interactive unmirror" aria-label="设置">
-      <div class="menu-row">
-        <span>智能体</span>
-        <select id="agentSelect" aria-label="切换智能体">
-          <option value="codex">Codex</option>
-          <option value="zcode">ZCode</option>
-        </select>
-      </div>
-      <div class="menu-row">
-        <span>大小</span>
-        <select id="scale" aria-label="挂件大小">
-          <option value="0.6">60%</option>
-          <option value="0.8">80%</option>
-          <option value="1">100%</option>
-          <option value="1.2">120%</option>
-          <option value="1.5">150%</option>
-          <option value="1.8">180%</option>
-          <option value="2">200%</option>
-          <option value="2.2">220%</option>
-          <option value="2.5">250%</option>
-        </select>
-      </div>
-      <div class="menu-row">
-        <span>触摸音效</span>
-        <select id="touchSound" aria-label="触摸音效">
-          <option value="duck">小黄鸭</option>
-          <option value="fx1">音效 1</option>
-          <option value="random">随机</option>
-          <option value="off">关闭</option>
-        </select>
-      </div>
-      <div class="menu-row">
-        <span>音量</span>
-        <input id="volume" type="range" min="0" max="1" step="0.05">
-      </div>
-      <label class="menu-row"><span>固定最上层</span><input id="alwaysOnTop" type="checkbox"></label>
-      <label class="menu-row"><span>结束提醒</span><input id="notifyOnStop" type="checkbox"></label>
-      <div class="menu-row">
-        <span>余额预警</span>
-        <select id="lowBalanceThreshold" aria-label="余额预警阈值">
-          <option value="0">关闭</option>
-          <option value="10">10%</option>
-          <option value="20">20%</option>
-          <option value="30">30%</option>
-          <option value="50">50%</option>
-        </select>
-      </div>
-      <button id="openEggEditor" type="button">编辑彩蛋文案</button>
-      <button id="refresh" type="button">刷新用量</button>
-      <button id="quit" type="button">退出挂件</button>
-    </section>
-
-    <section id="eggEditor" class="egg-editor interactive unmirror" aria-label="编辑彩蛋文案">
-      <div class="editor-title">彩蛋文案（每行一条）</div>
-      <textarea id="eggLines" maxlength="6000" spellcheck="false"></textarea>
-      <div class="editor-actions">
-        <button id="resetEggs" type="button">恢复默认</button>
-        <button id="cancelEggs" type="button">取消</button>
-        <button id="saveEggs" type="button">保存</button>
-      </div>
-    </section>
-  </main>
-
-  <audio id="duckPress" src="../assets/Ya1.mp3" preload="auto"></audio>
-  <audio id="duckRelease" src="../assets/Ya2.mp3" preload="auto"></audio>
-  <audio id="fx1Press" src="../assets/D1.mp3" preload="auto"></audio>
-  <audio id="fx1Release" src="../assets/D2.mp3" preload="auto"></audio>
-  <script src="renderer-v2.js"></script>
+  <script src="/whale-widget.js"></script>
+  <script src="/desktop-adapter.js"></script>
 </body>
 </html>

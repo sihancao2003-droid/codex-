@@ -5,6 +5,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const readline = require('node:readline');
+const { createWidgetServer } = require('./upstream-server.cjs');
 
 const pluginRoot = process.env.CODEX_WHALE_PLUGIN_ROOT || __dirname;
 const dataDir = path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'CodexWhaleWidget');
@@ -18,6 +19,7 @@ const screenshotPath = process.env.CODEX_WHALE_SCREENSHOT || null;
 const dragTestPath = process.env.CODEX_WHALE_DRAG_TEST || null;
 const agentTestPath = process.env.CODEX_WHALE_AGENT_TEST || null;
 const agentTestScreenshot = process.env.CODEX_WHALE_AGENT_SHOT || null;
+const upstreamTestPath = process.env.CODEX_WHALE_UPSTREAM_TEST || null;
 
 // ZCode home: credentials + telemetry live under ~/.zcode/v2.
 const zcodeV2Dir = path.join(os.homedir(), '.zcode', 'v2');
@@ -72,6 +74,15 @@ const defaults = {
   bubble: false,
   alwaysOnTop: true,
   notifyOnStop: true,
+  soundSet: 'duck',
+  usageMode: 'tokens',
+  peakMode: 'default',
+  bubbleOn: true,
+  turnCostOn: true,
+  turnCostCloseMs: 5000,
+  scrollGapOn: false,
+  scrollGapPx: 17,
+  menuBtnHide: true,
   easterEggChance: 0.28,
   easterEggLines: defaultEasterEggLines,
   activeAgent: 'codex',
@@ -103,6 +114,10 @@ let eventTimer;
 let moveSaveTimer;
 let rendererReady = false;
 const queuedEvents = [];
+let widgetServer;
+let widgetPort = null;
+let lastTurn = null;
+let lastTurnSeq = 0;
 
 const agents = {
   codex: { id: 'codex', name: 'Codex', available: null, reason: null },
@@ -198,21 +213,17 @@ function applyAlwaysOnTop() {
 }
 
 function createWindow() {
-  const size = widgetSize();
+  // The upstream widget owns its own fixed-position root and full feature UI.
+  // Give it a transparent desktop-sized canvas so its drag/snap/customization
+  // code can work across the entire work area instead of being clipped to a
+  // 250px Electron child window.
   const area = currentDisplay().workArea;
-  const fallbackX = area.x + area.width - size - 24;
-  const fallbackY = area.y + area.height - size - 18;
-  const position = clampPosition(
-    Number.isFinite(preferences.x) ? preferences.x : fallbackX,
-    Number.isFinite(preferences.y) ? preferences.y : fallbackY,
-    size
-  );
 
   win = new BrowserWindow({
-    x: position.x,
-    y: position.y,
-    width: size,
-    height: size,
+    x: area.x,
+    y: area.y,
+    width: area.width,
+    height: area.height,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -234,7 +245,7 @@ function createWindow() {
   applyAlwaysOnTop();
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setIgnoreMouseEvents(true, { forward: true });
-  win.loadFile(path.join(pluginRoot, 'ui', 'index.html'));
+  win.loadURL(`http://127.0.0.1:${widgetPort}/`);
   win.webContents.on('did-finish-load', () => {
     rendererReady = true;
     win.webContents.send('whale:agents', agentsSummary());
@@ -288,6 +299,26 @@ function createWindow() {
         fs.writeFileSync(agentTestPath, JSON.stringify(result, null, 2), 'utf8');
         app.quit();
       }, 800);
+    }
+    if (upstreamTestPath) {
+      const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      setTimeout(async () => {
+        const result = {};
+        try {
+          await pause(1800);
+          result.root = await win.webContents.executeJavaScript("Boolean(document.querySelector('.dshwv-root'))");
+          result.menu = await win.webContents.executeJavaScript("Boolean(document.querySelector('.dshwv-menu'))");
+          result.editor = await win.webContents.executeJavaScript("Boolean(document.querySelector('.dshwv-menu button'))");
+          result.agentSelector = await win.webContents.executeJavaScript("Boolean(document.getElementById('codexWhaleAgentSelect'))");
+          result.alwaysOnTopControl = await win.webContents.executeJavaScript("Boolean(document.getElementById('codexWhaleAlwaysOnTop'))");
+          result.balanceRoute = await win.webContents.executeJavaScript("fetch('/dsh-whale/balance.json').then(r => r.json())");
+          result.bubbleRoute = await win.webContents.executeJavaScript("fetch('/dsh-whale/bubble.json').then(r => r.json())");
+          result.resourceRoutes = await win.webContents.executeJavaScript("Promise.all(['/dsh-whale/roles.json','/dsh-whale/audio.json','/dsh-whale/bubble-imgs.json','/dsh-whale/usage-records.json'].map(u => fetch(u).then(r => r.json()).then(x => Boolean(x && x.ok))))");
+          result.contextMenu = await win.webContents.executeJavaScript("document.querySelector('.dshwv-root').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 })); Boolean(document.querySelector('.dshwv-menu.dshwv-menu-open'))");
+        } catch (error) { result.error = error.message; }
+        fs.writeFileSync(upstreamTestPath, JSON.stringify(result, null, 2), 'utf8');
+        app.quit();
+      }, 900);
     }
     if (dragTestPath) {
       // The scripted assertions below verify Codex-specific labels, so pin the
@@ -1142,11 +1173,19 @@ if (!dragTestPath && !agentTestPath && !app.requestSingleInstanceLock()) {
   app.on('second-instance', () => {
     if (win) { win.showInactive(); applyAlwaysOnTop(); }
   });
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     fs.mkdirSync(dataDir, { recursive: true });
     loadPreferences();
     loadCachedUsage();
     try { eventOffset = Math.max(0, fs.statSync(eventsFile).size - 65536); } catch { eventOffset = 0; }
+    widgetServer = createWidgetServer({
+      pluginRoot,
+      dataDir,
+      getUsage: activeUsage,
+      getAgent: () => normalizeActiveAgent(preferences.activeAgent),
+      getLastTurn: () => lastTurn ? { ok: true, seq: lastTurnSeq, ...lastTurn } : { ok: true, seq: lastTurnSeq, turn: null, amount: null, tokens: null, ts: null }
+    });
+    widgetPort = await widgetServer.start();
     createWindow();
     usageClient.start();
     zcodeUsageClient.start();
@@ -1167,5 +1206,6 @@ app.on('before-quit', () => {
   usageClient.stop();
   zcodeUsageClient.stop();
   zcodeWatcher.stop();
+  try { widgetServer?.stop(); } catch {}
   try { fs.unlinkSync(heartbeatFile); } catch {}
 });
