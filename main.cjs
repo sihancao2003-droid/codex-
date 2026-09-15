@@ -54,6 +54,7 @@ const defaults = {
   touchSound: 'duck',
   volume: 0.65,
   bubble: false,
+  alwaysOnTop: true,
   notifyOnStop: true,
   easterEggChance: 0.28,
   easterEggLines: defaultEasterEggLines,
@@ -92,6 +93,7 @@ function loadPreferences() {
     preferences = { ...defaults };
   }
   preferences.touchSound = normalizeTouchSound(preferences.touchSound || preferences.sound);
+  preferences.alwaysOnTop = preferences.alwaysOnTop !== false;
 }
 
 function loadCachedUsage() {
@@ -130,6 +132,13 @@ function sendSide() {
   win.webContents.send('whale:side', bounds.x + bounds.width / 2 < area.x + area.width / 2 ? 'left' : 'right');
 }
 
+function applyAlwaysOnTop() {
+  if (!win || win.isDestroyed()) return;
+  const enabled = preferences.alwaysOnTop !== false;
+  win.setAlwaysOnTop(enabled, enabled ? 'screen-saver' : 'normal');
+  if (enabled) win.moveTop();
+}
+
 function createWindow() {
   const size = widgetSize();
   const area = currentDisplay().workArea;
@@ -149,7 +158,7 @@ function createWindow() {
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
-    alwaysOnTop: true,
+    alwaysOnTop: preferences.alwaysOnTop !== false,
     skipTaskbar: true,
     resizable: false,
     maximizable: false,
@@ -164,7 +173,7 @@ function createWindow() {
       sandbox: true
     }
   });
-  win.setAlwaysOnTop(true, 'floating');
+  applyAlwaysOnTop();
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setIgnoreMouseEvents(true, { forward: true });
   win.loadFile(path.join(pluginRoot, 'ui', 'index.html'));
@@ -196,6 +205,7 @@ function createWindow() {
           const idleBubbleHidden = await win.webContents.executeJavaScript(
             "document.getElementById('bubble').classList.contains('open') === false"
           );
+          const alwaysOnTopInitially = win.isAlwaysOnTop();
           const observedWidths = [before.width];
           const observedHeights = [before.height];
           const recordSize = () => {
@@ -239,6 +249,19 @@ function createWindow() {
               const menuOpenAfterRightClick = await win.webContents.executeJavaScript(
                 "document.getElementById('menu').classList.contains('open')"
               );
+              const alwaysOnTopControlPresent = await win.webContents.executeJavaScript(
+                "Boolean(document.getElementById('alwaysOnTop'))"
+              );
+              await win.webContents.executeJavaScript(
+                "document.getElementById('alwaysOnTop').checked = false; document.getElementById('alwaysOnTop').dispatchEvent(new Event('change', { bubbles: true }));"
+              );
+              await new Promise((resolve) => setTimeout(resolve, 150));
+              const alwaysOnTopCanBeDisabled = preferences.alwaysOnTop === false && !win.isAlwaysOnTop();
+              await win.webContents.executeJavaScript(
+                "document.getElementById('alwaysOnTop').checked = true; document.getElementById('alwaysOnTop').dispatchEvent(new Event('change', { bubbles: true }));"
+              );
+              await new Promise((resolve) => setTimeout(resolve, 150));
+              const alwaysOnTopCanBeEnabled = preferences.alwaysOnTop === true && win.isAlwaysOnTop();
               const eggEditorOpenedFromMenu = await win.webContents.executeJavaScript(
                 "document.getElementById('openEggEditor').click(); document.getElementById('eggEditor').classList.contains('open')"
               );
@@ -284,6 +307,10 @@ function createWindow() {
                 dragReleased: drag === null,
                 hoverDidNotOpenMenu: menuOpenBeforeRightClick === false,
                 rightClickOpenedMenu: menuOpenAfterRightClick === true,
+                alwaysOnTopControlPresent,
+                alwaysOnTopInitially,
+                alwaysOnTopCanBeDisabled,
+                alwaysOnTopCanBeEnabled,
                 eggEditorOpenedFromMenu,
                 idleBubbleHidden,
                 primaryVisibleAfterPetClick,
@@ -317,6 +344,9 @@ function createWindow() {
     sendSide();
     clearTimeout(moveSaveTimer);
     moveSaveTimer = setTimeout(savePreferences, 250);
+  });
+  win.on('blur', () => {
+    if (preferences.alwaysOnTop !== false) setTimeout(applyAlwaysOnTop, 50);
   });
 }
 
@@ -488,11 +518,13 @@ ipcMain.handle('whale:get-state', () => ({ preferences, usage: latestUsage }));
 ipcMain.handle('whale:refresh-usage', () => usageClient.refresh().catch(() => null));
 ipcMain.handle('whale:save-preferences', (_event, next) => {
   const oldScale = preferences.scale;
+  const oldAlwaysOnTop = preferences.alwaysOnTop;
   if (drag && next && Object.hasOwn(next, 'scale')) next = { ...next, scale: oldScale };
   preferences = { ...preferences, ...next };
   preferences.scale = Math.min(2.5, Math.max(0.6, Number(preferences.scale) || defaults.scale));
   preferences.touchSound = normalizeTouchSound(preferences.touchSound || preferences.sound);
   preferences.volume = Math.min(1, Math.max(0, Number(preferences.volume) || 0));
+  preferences.alwaysOnTop = preferences.alwaysOnTop !== false;
   preferences.easterEggChance = Math.min(1, Math.max(0, Number(preferences.easterEggChance) || defaults.easterEggChance));
   if (Array.isArray(preferences.easterEggLines)) {
     preferences.easterEggLines = preferences.easterEggLines
@@ -510,6 +542,7 @@ ipcMain.handle('whale:save-preferences', (_event, next) => {
     win.setBounds({ ...position, width: size, height: size }, true);
     sendSide();
   }
+  if (win && preferences.alwaysOnTop !== oldAlwaysOnTop) applyAlwaysOnTop();
   return preferences;
 });
 ipcMain.on('whale:set-interactive', (_event, interactive) => {
@@ -564,7 +597,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (win) { win.showInactive(); win.moveTop(); }
+    if (win) { win.showInactive(); applyAlwaysOnTop(); }
   });
   app.whenReady().then(() => {
     fs.mkdirSync(dataDir, { recursive: true });

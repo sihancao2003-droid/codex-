@@ -12,6 +12,7 @@ const controls = {
   scale: document.getElementById('scale'),
   touchSound: document.getElementById('touchSound'),
   volume: document.getElementById('volume'),
+  alwaysOnTop: document.getElementById('alwaysOnTop'),
   notifyOnStop: document.getElementById('notifyOnStop')
 };
 
@@ -243,6 +244,7 @@ function saveControls() {
     scale: Number(controls.scale.value),
     touchSound: controls.touchSound.value,
     volume: Number(controls.volume.value),
+    alwaysOnTop: controls.alwaysOnTop.checked,
     notifyOnStop: controls.notifyOnStop.checked
   };
   if (Number(preferences.scale) !== previousScale) visualLockUntil = 0;
@@ -253,6 +255,7 @@ function applyPreferences() {
   controls.scale.value = preferences.scale ?? 1.5;
   controls.touchSound.value = preferences.touchSound || preferences.sound || 'duck';
   controls.volume.value = preferences.volume ?? .65;
+  controls.alwaysOnTop.checked = preferences.alwaysOnTop !== false;
   controls.notifyOnStop.checked = preferences.notifyOnStop !== false;
   eggLines.value = (preferences.easterEggLines?.length ? preferences.easterEggLines : DEFAULT_EGGS).join('\n');
   hideBubble();
