@@ -170,7 +170,8 @@ function renderAllowance(kind) {
     label.textContent = `ZCode · ${windowValue?.name || (isPrimary ? '主额度' : '额度')}`;
     amount.textContent = value == null ? '--%' : `${value}%`;
     const agentInfo = agentsInfo?.agents?.find((entry) => entry.id === 'zcode');
-    if (value == null && usage?.error) detail.textContent = usage.error;
+    if (value == null && usage?.quotaError) detail.textContent = usage.quotaError;
+    else if (value == null && usage?.error) detail.textContent = usage.error;
     else if (value == null && agentInfo && agentInfo.available === false) {
       detail.textContent = agentInfo.reason || 'ZCode 登录已过期，请打开 ZCode 重新登录';
     } else detail.textContent = value == null ? '正在读取账户额度…' : zcodeBucketDetail(windowValue);

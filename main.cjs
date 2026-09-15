@@ -26,6 +26,9 @@ const zcodeTelemetryFile = path.join(zcodeV2Dir, 'telemetry-state.json');
 const zcodeRolloutDir = path.join(os.homedir(), '.zcode', 'cli', 'rollout');
 const zcodeBalanceUrl = 'https://zcode.z.ai/api/v1/zcode-plan/billing/balance';
 const zcodeAppVersion = '3.11.2';
+// Personal GLM Coding Plan windows (weekly / 5-hour usage percentage) live on
+// open.bigmodel.cn, separate from the ZCode Start Plan daily trial buckets.
+const bigmodelQuotaUrl = 'https://open.bigmodel.cn/api/monitor/usage/quota/limit';
 
 const defaultEasterEggLines = [
   '不知道用户有什么用，先养着吧～',
@@ -267,7 +270,7 @@ function createWindow() {
           result.switchToZcodeLabel = await js("document.getElementById('label').textContent");
           await pause(3500);
           result.zcodeBubbleAfterWait = await js("({ label: document.getElementById('label').textContent, amount: document.getElementById('amount').textContent, detail: document.getElementById('detail').textContent, open: document.getElementById('bubble').classList.contains('open') })");
-          result.zcodeUsageShape = await js("({ agent: typeof usage !== 'undefined' && usage ? (usage.agent || 'codex') : null, primaryName: usage?.primary?.name || null, primaryRemaining: usage?.primary?.remainingPercent ?? null, secondaryName: usage?.secondary?.name || null, todayTokens: usage?.todayTokens ?? null, todayByModel: usage?.todayByModel || null })");
+          result.zcodeUsageShape = await js("({ agent: typeof usage !== 'undefined' && usage ? (usage.agent || 'codex') : null, quotaSource: usage?.quotaSource || null, primaryName: usage?.primary?.name || null, primaryRemaining: usage?.primary?.remainingPercent ?? null, secondaryName: usage?.secondary?.name || null, secondaryRemaining: usage?.secondary?.remainingPercent ?? null, modelBucketCount: usage?.modelBuckets?.length ?? 0, todayTokens: usage?.todayTokens ?? null, todayByModel: usage?.todayByModel || null })");
           result.todayView = await js("renderTodayUsage(); ({ label: document.getElementById('label').textContent, amount: document.getElementById('amount').textContent, detail: document.getElementById('detail').textContent })");
           result.codexSwitchBack = await js("document.getElementById('agentSelect').value = 'codex'; document.getElementById('agentSelect').dispatchEvent(new Event('change', { bubbles: true })); 'ok'");
           await pause(1200);
@@ -662,6 +665,15 @@ function loadZCodeToken() {
   return decryptZCodeCredential(raw).trim();
 }
 
+function loadBigmodelToken() {
+  let creds;
+  try { creds = JSON.parse(fs.readFileSync(zcodeCredentialsFile, 'utf8')); }
+  catch { throw new Error('未找到 bigmodel 登录凭据'); }
+  const raw = creds['oauth:bigmodel:access_token'];
+  if (typeof raw !== 'string' || !raw.trim()) throw new Error('bigmodel access_token missing');
+  return decryptZCodeCredential(raw).trim();
+}
+
 function loadZCodeDeviceMid() {
   try { return JSON.parse(fs.readFileSync(zcodeTelemetryFile, 'utf8')).deviceMid || ''; }
   catch { return ''; }
@@ -706,15 +718,17 @@ function normalizeZCodeBucket(balance) {
 
 function normalizeZCodeUsage(payload) {
   const data = payload?.data || payload || {};
-  const buckets = (Array.isArray(data.balances) ? data.balances : [])
+  const modelBuckets = (Array.isArray(data.balances) ? data.balances : [])
     .map(normalizeZCodeBucket)
     .filter(Boolean)
     .sort((a, b) => (b.usedPercent || 0) - (a.usedPercent || 0));
   return {
     agent: 'zcode',
-    primary: buckets[0] || null,
-    secondary: buckets[1] || null,
-    buckets,
+    primary: null,
+    secondary: null,
+    modelBuckets,
+    // Keep the old field for any cached UI/test code that still reads it.
+    buckets: modelBuckets,
     plans: (Array.isArray(data.plans) ? data.plans : []).map((plan) => ({
       name: plan.name,
       status: plan.status,
@@ -722,6 +736,72 @@ function normalizeZCodeUsage(payload) {
     })),
     fetchedAt: Date.now()
   };
+}
+
+function normalizeBigmodelLimit(limit, index, totalLimits) {
+  if (!limit || typeof limit !== 'object') return null;
+  const totalUnits = Number(limit.usage);
+  const usedUnits = Number(limit.currentValue);
+  const remainingUnits = Number(limit.remaining);
+  if (!Number.isFinite(totalUnits) || totalUnits <= 0 || !Number.isFinite(remainingUnits)) return null;
+  const usedPercent = Number.isFinite(Number(limit.percentage))
+    ? Math.max(0, Math.min(100, Number(limit.percentage)))
+    : Math.max(0, Math.min(100, (usedUnits / totalUnits) * 100));
+  const nextResetMillis = Number(limit.nextResetTime);
+  const resetsAt = Number.isFinite(nextResetMillis)
+    ? Math.round((nextResetMillis > 1e12 ? nextResetMillis : nextResetMillis * 1000) / 1000)
+    : null;
+  const name = totalLimits > 1
+    ? index === 0 ? '5小时' : index === 1 ? '每周' : `窗口 ${index + 1}`
+    : '套餐额度';
+  return {
+    id: `${limit.type || 'quota'}-${limit.unit ?? index}`,
+    name,
+    usedUnits: Math.max(0, Math.round(Number.isFinite(usedUnits) ? usedUnits : totalUnits - remainingUnits)),
+    totalUnits: Math.round(totalUnits),
+    remainingUnits: Math.max(0, Math.round(remainingUnits)),
+    usedPercent: Math.round(usedPercent * 10) / 10,
+    remainingPercent: Math.round((100 - usedPercent) * 10) / 10,
+    period: name,
+    resetsAt
+  };
+}
+
+function normalizeBigmodelQuota(payload) {
+  const limits = Array.isArray(payload?.data?.limits) ? payload.data.limits : [];
+  const ordered = limits
+    .map((limit, index) => ({ limit, index }))
+    .sort((a, b) => Number(a.limit?.nextResetTime || Number.MAX_SAFE_INTEGER) - Number(b.limit?.nextResetTime || Number.MAX_SAFE_INTEGER))
+    .map(({ limit }, index) => normalizeBigmodelLimit(limit, index, limits.length))
+    .filter(Boolean);
+  return {
+    primary: ordered[0] || null,
+    secondary: ordered[1] || null,
+    windows: ordered
+  };
+}
+
+async function fetchBigmodelQuota() {
+  try {
+    const token = loadBigmodelToken();
+    const response = await fetch(bigmodelQuotaUrl, {
+      headers: {
+        Authorization: token,
+        'Content-Type': 'application/json',
+        'User-Agent': `ZCode/${zcodeAppVersion}`
+      },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!response.ok) throw new Error(`quota/limit HTTP ${response.status}`);
+    const payload = await response.json();
+    if (payload?.code !== 200 && payload?.success !== true) {
+      throw new Error(payload?.msg || 'BigModel 配额响应无效');
+    }
+    return normalizeBigmodelQuota(payload);
+  } catch (error) {
+    log(`bigmodel quota failed: ${error.message}`);
+    return null;
+  }
 }
 
 class ZcodeUsageClient {
@@ -755,6 +835,16 @@ class ZcodeUsageClient {
         throw new Error(`billing/balance HTTP ${response.status}`);
       } else {
         usage = normalizeZCodeUsage(await response.json());
+      }
+      const quota = await fetchBigmodelQuota();
+      if (quota) {
+        usage.primary = quota.primary;
+        usage.secondary = quota.secondary;
+        usage.quotaWindows = quota.windows;
+        usage.quotaSource = 'bigmodel';
+      } else {
+        usage.quotaSource = null;
+        usage.quotaError = '个人套餐额度暂时无法读取';
       }
       const today = readZCodeTodayUsage();
       usage.todayTokens = today ? today.total : null;
@@ -1046,7 +1136,7 @@ ipcMain.on('whale:drag-end', () => {
 });
 ipcMain.on('whale:quit', () => app.quit());
 
-if (!dragTestPath && !app.requestSingleInstanceLock()) {
+if (!dragTestPath && !agentTestPath && !app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
