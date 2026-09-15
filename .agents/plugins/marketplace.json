@@ -1,0 +1,20 @@
+{
+  "name": "codex-whale-widget",
+  "interface": {
+    "displayName": "Codex Whale Widget"
+  },
+  "plugins": [
+    {
+      "name": "codex-whale-widget",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/sihancao2003-droid/codex-.git"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

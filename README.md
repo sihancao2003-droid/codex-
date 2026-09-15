@@ -11,6 +11,8 @@
 
 ## 启动
 
+面向其他用户的完整下载、安装、更新和卸载说明见 [INSTALL.md](INSTALL.md)。
+
 安装依赖后可手动运行：
 
 ```powershell

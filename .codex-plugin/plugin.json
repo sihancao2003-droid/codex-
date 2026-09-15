@@ -1,6 +1,6 @@
 {
   "name": "codex-whale-widget",
-  "version": "0.1.1+codex.20260915020353",
+  "version": "0.1.1+codex.20260915024202",
   "description": "A transparent desktop whale that mirrors Codex task state and remaining subscription usage.",
   "author": {
     "name": "Local developer"
