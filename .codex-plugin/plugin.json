@@ -1,6 +1,6 @@
 {
   "name": "codex-whale-widget",
-  "version": "0.1.1+codex.20260915024202",
+  "version": "0.2.0+codex.20260915081500",
   "description": "A transparent desktop whale that mirrors Codex task state and remaining subscription usage.",
   "author": {
     "name": "Local developer"
@@ -14,7 +14,9 @@
     "capabilities": [
       "Hooks",
       "Desktop overlay",
-      "Codex usage"
+      "Codex usage",
+      "ZCode balance",
+      "Agent switching"
     ],
     "defaultPrompt": "Show me how to configure or troubleshoot Codex Whale Widget."
   }

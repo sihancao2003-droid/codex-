@@ -1,8 +1,8 @@
 {
   "name": "codex-whale-widget",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
-  "description": "Transparent Codex usage whale overlay",
+  "description": "Transparent whale overlay with agent switching: Codex rate limits and ZCode account balance",
   "main": "main.cjs",
   "license": "MIT",
   "scripts": {

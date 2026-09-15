@@ -16,7 +16,7 @@
         <ellipse cx="442" cy="646" rx="24.5" ry="18"/>
       </svg>
       <div class="bubble-content unmirror">
-        <div id="label" class="label">Codex 剩余</div>
+        <div id="label" class="label">剩余额度</div>
         <div id="amount" class="amount">--%</div>
         <div id="detail" class="detail">正在读取套餐用量…</div>
       </div>
@@ -25,6 +25,13 @@
     <img id="pet" class="pet interactive" src="../assets/DSniang1.png" alt="DeepSeek 鲸鱼娘">
 
     <section id="menu" class="menu interactive unmirror" aria-label="设置">
+      <div class="menu-row">
+        <span>智能体</span>
+        <select id="agentSelect" aria-label="切换智能体">
+          <option value="codex">Codex</option>
+          <option value="zcode">ZCode</option>
+        </select>
+      </div>
       <div class="menu-row">
         <span>大小</span>
         <select id="scale" aria-label="挂件大小">
@@ -54,6 +61,16 @@
       </div>
       <label class="menu-row"><span>固定最上层</span><input id="alwaysOnTop" type="checkbox"></label>
       <label class="menu-row"><span>结束提醒</span><input id="notifyOnStop" type="checkbox"></label>
+      <div class="menu-row">
+        <span>余额预警</span>
+        <select id="lowBalanceThreshold" aria-label="余额预警阈值">
+          <option value="0">关闭</option>
+          <option value="10">10%</option>
+          <option value="20">20%</option>
+          <option value="30">30%</option>
+          <option value="50">50%</option>
+        </select>
+      </div>
       <button id="openEggEditor" type="button">编辑彩蛋文案</button>
       <button id="refresh" type="button">刷新用量</button>
       <button id="quit" type="button">退出挂件</button>

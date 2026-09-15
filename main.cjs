@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, screen } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const readline = require('node:readline');
 
@@ -10,9 +12,20 @@ const stateFile = path.join(dataDir, 'state.json');
 const eventsFile = path.join(dataDir, 'events.jsonl');
 const heartbeatFile = path.join(dataDir, 'heartbeat');
 const usageDebugFile = path.join(dataDir, 'latest-usage.json');
+const zcodeUsageDebugFile = path.join(dataDir, 'latest-zcode-usage.json');
 const logFile = path.join(dataDir, 'widget.log');
 const screenshotPath = process.env.CODEX_WHALE_SCREENSHOT || null;
 const dragTestPath = process.env.CODEX_WHALE_DRAG_TEST || null;
+const agentTestPath = process.env.CODEX_WHALE_AGENT_TEST || null;
+const agentTestScreenshot = process.env.CODEX_WHALE_AGENT_SHOT || null;
+
+// ZCode home: credentials + telemetry live under ~/.zcode/v2.
+const zcodeV2Dir = path.join(os.homedir(), '.zcode', 'v2');
+const zcodeCredentialsFile = path.join(zcodeV2Dir, 'credentials.json');
+const zcodeTelemetryFile = path.join(zcodeV2Dir, 'telemetry-state.json');
+const zcodeRolloutDir = path.join(os.homedir(), '.zcode', 'cli', 'rollout');
+const zcodeBalanceUrl = 'https://zcode.z.ai/api/v1/zcode-plan/billing/balance';
+const zcodeAppVersion = '3.11.2';
 
 const defaultEasterEggLines = [
   '不知道用户有什么用，先养着吧～',
@@ -58,9 +71,17 @@ const defaults = {
   notifyOnStop: true,
   easterEggChance: 0.28,
   easterEggLines: defaultEasterEggLines,
+  activeAgent: 'codex',
+  lowBalanceThreshold: 20,
   x: null,
   y: null
 };
+
+const agentIds = new Set(['codex', 'zcode']);
+
+function normalizeActiveAgent(value) {
+  return agentIds.has(value) ? value : defaults.activeAgent;
+}
 
 const touchSoundOptions = new Set(['duck', 'fx1', 'random', 'off']);
 
@@ -71,6 +92,7 @@ function normalizeTouchSound(value) {
 let win;
 let preferences = { ...defaults };
 let latestUsage = null;
+let latestZcodeUsage = null;
 let eventOffset = 0;
 let drag = null;
 let heartbeatTimer;
@@ -78,6 +100,36 @@ let eventTimer;
 let moveSaveTimer;
 let rendererReady = false;
 const queuedEvents = [];
+
+const agents = {
+  codex: { id: 'codex', name: 'Codex', available: null, reason: null },
+  zcode: { id: 'zcode', name: 'ZCode', available: null, reason: null }
+};
+
+function agentsSummary() {
+  const active = normalizeActiveAgent(preferences.activeAgent);
+  return {
+    activeAgent: active,
+    agents: [
+      { ...agents.codex, active: active === 'codex' },
+      { ...agents.zcode, active: active === 'zcode' }
+    ]
+  };
+}
+
+function sendAgents() {
+  if (win && !win.isDestroyed()) win.webContents.send('whale:agents', agentsSummary());
+}
+
+function activeUsage() {
+  return normalizeActiveAgent(preferences.activeAgent) === 'zcode'
+    ? latestZcodeUsage
+    : latestUsage;
+}
+
+function sendUsage(value = activeUsage()) {
+  if (win && !win.isDestroyed()) win.webContents.send('whale:usage', value);
+}
 
 function log(message) {
   try {
@@ -94,11 +146,14 @@ function loadPreferences() {
   }
   preferences.touchSound = normalizeTouchSound(preferences.touchSound || preferences.sound);
   preferences.alwaysOnTop = preferences.alwaysOnTop !== false;
+  preferences.activeAgent = normalizeActiveAgent(preferences.activeAgent);
 }
 
 function loadCachedUsage() {
   try { latestUsage = JSON.parse(fs.readFileSync(usageDebugFile, 'utf8')); }
   catch { latestUsage = null; }
+  try { latestZcodeUsage = JSON.parse(fs.readFileSync(zcodeUsageDebugFile, 'utf8')); }
+  catch { latestZcodeUsage = null; }
 }
 
 function savePreferences() {
@@ -179,12 +234,15 @@ function createWindow() {
   win.loadFile(path.join(pluginRoot, 'ui', 'index.html'));
   win.webContents.on('did-finish-load', () => {
     rendererReady = true;
+    win.webContents.send('whale:agents', agentsSummary());
     while (queuedEvents.length) win.webContents.send('whale:codex-event', queuedEvents.shift());
+    const current = activeUsage();
+    if (current) sendUsage(current);
   });
   win.once('ready-to-show', () => {
     win.showInactive();
     sendSide();
-    if (latestUsage) win.webContents.send('whale:usage', latestUsage);
+    if (activeUsage()) sendUsage(activeUsage());
     if (screenshotPath) {
       setTimeout(async () => {
         try {
@@ -195,7 +253,44 @@ function createWindow() {
         }
       }, 5000);
     }
+    if (agentTestPath) {
+      const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const js = (code) => win.webContents.executeJavaScript(code).catch((error) => ({ error: error.message }));
+      setTimeout(async () => {
+        const result = {};
+        try {
+          await pause(2500);
+          result.menuHasAgentSelect = await js("Boolean(document.getElementById('agentSelect'))");
+          result.menuHasLowBalance = await js("Boolean(document.getElementById('lowBalanceThreshold'))");
+          await js("document.getElementById('agentSelect').value = 'zcode'; document.getElementById('agentSelect').dispatchEvent(new Event('change', { bubbles: true }))");
+          await pause(1200);
+          result.switchToZcodeLabel = await js("document.getElementById('label').textContent");
+          await pause(3500);
+          result.zcodeBubbleAfterWait = await js("({ label: document.getElementById('label').textContent, amount: document.getElementById('amount').textContent, detail: document.getElementById('detail').textContent, open: document.getElementById('bubble').classList.contains('open') })");
+          result.zcodeUsageShape = await js("({ agent: typeof usage !== 'undefined' && usage ? (usage.agent || 'codex') : null, primaryName: usage?.primary?.name || null, primaryRemaining: usage?.primary?.remainingPercent ?? null, secondaryName: usage?.secondary?.name || null, todayTokens: usage?.todayTokens ?? null, todayByModel: usage?.todayByModel || null })");
+          result.todayView = await js("renderTodayUsage(); ({ label: document.getElementById('label').textContent, amount: document.getElementById('amount').textContent, detail: document.getElementById('detail').textContent })");
+          result.codexSwitchBack = await js("document.getElementById('agentSelect').value = 'codex'; document.getElementById('agentSelect').dispatchEvent(new Event('change', { bubbles: true })); 'ok'");
+          await pause(1200);
+          result.codexLabelAfterSwitch = await js("document.getElementById('label').textContent");
+          if (agentTestScreenshot) {
+            await js("document.getElementById('agentSelect').value = 'zcode'; document.getElementById('agentSelect').dispatchEvent(new Event('change', { bubbles: true }))");
+            await pause(2500);
+            const image = await win.webContents.capturePage();
+            fs.writeFileSync(agentTestScreenshot, image.toPNG());
+          }
+          result.savedActiveAgent = preferences.activeAgent;
+        } catch (error) {
+          result.error = error.message;
+        }
+        fs.writeFileSync(agentTestPath, JSON.stringify(result, null, 2), 'utf8');
+        app.quit();
+      }, 800);
+    }
     if (dragTestPath) {
+      // The scripted assertions below verify Codex-specific labels, so pin the
+      // agent for the duration of the run and restore the saved choice after.
+      const savedAgentForTest = preferences.activeAgent;
+      preferences.activeAgent = 'codex';
       setTimeout(async () => {
         try {
           const before = win.getBounds();
@@ -268,6 +363,10 @@ function createWindow() {
               await win.webContents.executeJavaScript("document.getElementById('cancelEggs').click()");
               win.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'right', clickCount: 1 });
               win.webContents.sendInputEvent({ type: 'mouseUp', ...point, button: 'right', clickCount: 1 });
+              // The menu fades out over 130ms while visibility stays true, and the
+              // taller agent menu can cover the pet during that window. Let the
+              // transition finish so the synthetic left click reaches the whale.
+              await new Promise((resolve) => setTimeout(resolve, 220));
               win.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 });
               win.webContents.sendInputEvent({ type: 'mouseUp', ...point, button: 'left', clickCount: 1 });
               await new Promise((resolve) => setTimeout(resolve, 160));
@@ -352,11 +451,15 @@ function createWindow() {
                 after
               };
               fs.writeFileSync(dragTestPath, JSON.stringify(result, null, 2), 'utf8');
+              preferences.activeAgent = savedAgentForTest;
+              savePreferences();
               app.quit();
             }, 800);
           }, 12);
         } catch (error) {
           fs.writeFileSync(dragTestPath, JSON.stringify({ error: error.message }, null, 2), 'utf8');
+          preferences.activeAgent = savedAgentForTest;
+          savePreferences();
           app.quit();
         }
       }, 800);
@@ -526,9 +629,297 @@ function normalizeUsage(result, accountUsage = null) {
 
 const usageClient = new CodexUsageClient((usage) => {
   latestUsage = usage;
+  agents.codex.available = true;
+  agents.codex.reason = null;
   try { fs.writeFileSync(usageDebugFile, JSON.stringify(usage, null, 2), 'utf8'); } catch {}
-  if (win && !win.isDestroyed()) win.webContents.send('whale:usage', usage);
+  if (normalizeActiveAgent(preferences.activeAgent) === 'codex') sendUsage(usage);
 });
+
+// Mirrors ZCode's own credential scheme (zcode.cjs createZCodeCredentialCipher):
+// AES-256-GCM with a key derived from platform/homedir/username, so the whale
+// can read the cached JWT without touching the running app.
+function decryptZCodeCredential(value) {
+  const PREFIX = 'enc:v1:';
+  if (typeof value !== 'string' || !value.startsWith(PREFIX)) return value;
+  const [ivB64, tagB64, dataB64] = value.slice(PREFIX.length).split('.');
+  if (!ivB64 || !tagB64 || !dataB64) throw new Error('invalid credential format');
+  let username = 'unknown';
+  try { username = os.userInfo().username; } catch {}
+  const secret = process.env.ZCODE_CREDENTIAL_SECRET?.trim()
+    || `zcode-credential-fallback:${os.platform()}:${os.homedir()}:${username}`;
+  const key = crypto.createHash('sha256').update(secret).digest();
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64url'));
+  decipher.setAuthTag(Buffer.from(tagB64, 'base64url'));
+  return Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64url')), decipher.final()]).toString('utf8');
+}
+
+function loadZCodeToken() {
+  let creds;
+  try { creds = JSON.parse(fs.readFileSync(zcodeCredentialsFile, 'utf8')); }
+  catch { throw new Error('未找到 ZCode 登录凭据，请先在 ZCode 中登录'); }
+  const raw = creds['zcodejwttoken'];
+  if (typeof raw !== 'string' || !raw.trim()) throw new Error('zcodejwttoken missing');
+  return decryptZCodeCredential(raw).trim();
+}
+
+function loadZCodeDeviceMid() {
+  try { return JSON.parse(fs.readFileSync(zcodeTelemetryFile, 'utf8')).deviceMid || ''; }
+  catch { return ''; }
+}
+
+function zcodeHeaders(token) {
+  return {
+    Authorization: `Bearer ${token}`,
+    'HTTP-Referer': 'https://zcode.z.ai',
+    'User-Agent': `ZCode/${zcodeAppVersion}`,
+    'X-ZCode-App-Version': zcodeAppVersion,
+    'X-Title': 'Z Code@electron',
+    'X-Platform': `${process.platform}-${process.arch}`,
+    'X-Release-Channel': 'stable',
+    'X-Client-Language': 'zh-CN',
+    'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown',
+    'X-Os-Category': process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux',
+    'X-Os-Version': os.release(),
+    'X-Device-Mid': loadZCodeDeviceMid(),
+    'x-request-id': crypto.randomUUID()
+  };
+}
+
+function normalizeZCodeBucket(balance) {
+  if (!balance || typeof balance !== 'object') return null;
+  const total = Number(balance.total_units);
+  const used = Number(balance.used_units);
+  if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(used)) return null;
+  const usedPercent = Math.max(0, Math.min(100, (used / total) * 100));
+  return {
+    id: balance.entitlement_id || balance.bucket_id || null,
+    name: balance.show_name || '套餐额度',
+    usedUnits: Math.round(used),
+    totalUnits: Math.round(total),
+    remainingUnits: Math.max(0, Math.round(total - used)),
+    usedPercent: Math.round(usedPercent * 10) / 10,
+    remainingPercent: Math.round((100 - usedPercent) * 10) / 10,
+    period: balance.period || null,
+    resetsAt: Number.isFinite(balance.expires_at) ? balance.expires_at : null
+  };
+}
+
+function normalizeZCodeUsage(payload) {
+  const data = payload?.data || payload || {};
+  const buckets = (Array.isArray(data.balances) ? data.balances : [])
+    .map(normalizeZCodeBucket)
+    .filter(Boolean)
+    .sort((a, b) => (b.usedPercent || 0) - (a.usedPercent || 0));
+  return {
+    agent: 'zcode',
+    primary: buckets[0] || null,
+    secondary: buckets[1] || null,
+    buckets,
+    plans: (Array.isArray(data.plans) ? data.plans : []).map((plan) => ({
+      name: plan.name,
+      status: plan.status,
+      endsAt: plan.ends_at ?? null
+    })),
+    fetchedAt: Date.now()
+  };
+}
+
+class ZcodeUsageClient {
+  constructor() {
+    this.timer = null;
+    this.token = null;
+    this.tokenReadAt = 0;
+  }
+
+  async loadToken(force = false) {
+    if (!force && this.token && Date.now() - this.tokenReadAt < 5 * 60 * 1000) return this.token;
+    this.token = loadZCodeToken();
+    this.tokenReadAt = Date.now();
+    return this.token;
+  }
+
+  async refresh() {
+    let usage;
+    try {
+      const token = await this.loadToken();
+      const url = `${zcodeBalanceUrl}?app_version=${zcodeAppVersion}`;
+      let response = await fetch(url, { headers: zcodeHeaders(token) });
+      if (response.status === 401) {
+        this.token = null;
+        const fresh = await this.loadToken(true).catch(() => null);
+        if (fresh) response = await fetch(url, { headers: zcodeHeaders(fresh) }).catch(() => null) || response;
+      }
+      if (!response || response.status === 401) {
+        throw new Error('ZCode 登录已过期，请打开 ZCode 重新登录');
+      } else if (!response.ok) {
+        throw new Error(`billing/balance HTTP ${response.status}`);
+      } else {
+        usage = normalizeZCodeUsage(await response.json());
+      }
+      const today = readZCodeTodayUsage();
+      usage.todayTokens = today ? today.total : null;
+      usage.todayByModel = today ? today.byModel : null;
+      agents.zcode.available = true;
+      agents.zcode.reason = null;
+    } catch (error) {
+      agents.zcode.available = false;
+      agents.zcode.reason = error.message?.slice(0, 120) || 'ZCode 不可用';
+      if (latestZcodeUsage) {
+        usage = { ...latestZcodeUsage, stale: true, staleReason: agents.zcode.reason };
+      } else {
+        usage = { agent: 'zcode', error: agents.zcode.reason, fetchedAt: Date.now() };
+      }
+      log(`zcode usage failed: ${agents.zcode.reason}`);
+    }
+    latestZcodeUsage = usage;
+    try { fs.writeFileSync(zcodeUsageDebugFile, JSON.stringify(usage, null, 2), 'utf8'); } catch {}
+    sendAgents();
+    if (normalizeActiveAgent(preferences.activeAgent) === 'zcode') sendUsage(usage);
+    return usage;
+  }
+
+  start() {
+    this.refresh().catch(() => {});
+    this.timer = setInterval(() => this.refresh().catch(() => {}), 60000);
+    this.timer.unref?.();
+  }
+
+  stop() {
+    clearInterval(this.timer);
+  }
+}
+
+const zcodeUsageClient = new ZcodeUsageClient();
+
+// Reads ~/.zcode/cli/rollout/model-io-*.jsonl and aggregates today's token
+// usage per model. Only completed JSON lines are counted; chat bodies are
+// never parsed into memory beyond streaming the line for usage fields.
+function readZCodeTodayUsage() {
+  let files;
+  try { files = fs.readdirSync(zcodeRolloutDir).filter((name) => /^model-io-.*\.jsonl$/.test(name)); }
+  catch { return null; }
+  const today = new Date();
+  const dayPrefix = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  let total = 0;
+  const byModel = new Map();
+  let sawAnyLine = false;
+  for (const name of files) {
+    const file = path.join(zcodeRolloutDir, name);
+    let content;
+    try { content = fs.readFileSync(file, 'utf8'); } catch { continue; }
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (!trimmed.includes('"completedAt"')) continue;
+      let record;
+      try { record = JSON.parse(trimmed); } catch { continue; }
+      if (!String(record.completedAt || '').startsWith(dayPrefix)) continue;
+      const usage = record?.response?.usage || record?.usage;
+      const tokens = Number(usage?.totalTokens ?? usage?.total_tokens);
+      if (!Number.isFinite(tokens) || tokens <= 0) continue;
+      sawAnyLine = true;
+      total += tokens;
+      const model = record?.model?.modelId || '未知模型';
+      byModel.set(model, (byModel.get(model) || 0) + tokens);
+    }
+  }
+  if (!sawAnyLine) return null;
+  return { total, byModel: Object.fromEntries(byModel) };
+}
+
+// Watches model-io logs to mirror ZCode task activity as synthetic hook
+// events, so the whale reacts to ZCode sessions without any hooks config.
+class ZcodeActivityWatcher {
+  constructor() {
+    this.sizes = new Map();
+    this.idle = true;
+    this.lastAppendAt = 0;
+    this.taskTokens = 0;
+    this.timer = null;
+    this.stopTimer = null;
+  }
+
+  snapshot() {
+    const sizes = new Map();
+    try {
+      for (const name of fs.readdirSync(zcodeRolloutDir)) {
+        if (!/^model-io-.*\.jsonl$/.test(name)) continue;
+        try { sizes.set(name, fs.statSync(path.join(zcodeRolloutDir, name)).size); } catch {}
+      }
+    } catch {}
+    return sizes;
+  }
+
+  emit(name, extra = {}) {
+    const event = { hook_event_name: name, agent: 'zcode', receivedAt: Date.now(), ...extra };
+    if (rendererReady && win && !win.isDestroyed()) win.webContents.send('whale:codex-event', event);
+  }
+
+  poll() {
+    const sizes = this.snapshot();
+    let appended = 0;
+    let appendedTokens = 0;
+    let lastRecord = null;
+    for (const [name, size] of sizes) {
+      const previous = this.sizes.get(name) ?? 0;
+      if (size <= previous) continue;
+      let chunk = '';
+      try {
+        const fd = fs.openSync(path.join(zcodeRolloutDir, name), 'r');
+        const buffer = Buffer.alloc(size - previous);
+        fs.readSync(fd, buffer, 0, buffer.length, previous);
+        fs.closeSync(fd);
+        chunk = buffer.toString('utf8');
+      } catch { this.sizes.set(name, size); continue; }
+      this.sizes.set(name, size);
+      for (const line of chunk.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('{') === false) continue;
+        let record;
+        try { record = JSON.parse(trimmed); } catch { continue; }
+        appended += 1;
+        const usage = record?.response?.usage || record?.usage;
+        const tokens = Number(usage?.totalTokens ?? usage?.total_tokens);
+        if (Number.isFinite(tokens) && tokens > 0) appendedTokens += tokens;
+        lastRecord = record;
+      }
+    }
+    for (const name of this.sizes.keys()) if (!sizes.has(name)) this.sizes.delete(name);
+    if (appended > 0) {
+      const model = lastRecord?.model?.modelId || null;
+      if (this.idle) {
+        this.idle = false;
+        this.taskTokens = 0;
+        this.emit('UserPromptSubmit', { model });
+      }
+      this.taskTokens += appendedTokens;
+      this.lastAppendAt = Date.now();
+      this.emit('PreToolUse', { model });
+      clearTimeout(this.stopTimer);
+      this.stopTimer = setTimeout(() => {
+        if (this.idle) return;
+        this.idle = true;
+        this.emit('Stop', { model, usage: { total_tokens: this.taskTokens } });
+        zcodeUsageClient.refresh().catch(() => {});
+      }, 6000);
+    }
+  }
+
+  start() {
+    this.sizes = this.snapshot();
+    this.timer = setInterval(() => {
+      try { this.poll(); } catch {}
+    }, 2000);
+    this.timer.unref?.();
+  }
+
+  stop() {
+    clearInterval(this.timer);
+    clearTimeout(this.stopTimer);
+  }
+}
+
+const zcodeWatcher = new ZcodeActivityWatcher();
 
 function pollEvents() {
   try {
@@ -545,8 +936,9 @@ function pollEvents() {
       try {
         const value = JSON.parse(line);
         if (Date.now() - (value.receivedAt || 0) < 30000 && win && !win.isDestroyed()) {
-          if (rendererReady) win.webContents.send('whale:codex-event', value);
-          else queuedEvents.push(value);
+          const tagged = { agent: 'codex', ...value };
+          if (rendererReady) win.webContents.send('whale:codex-event', tagged);
+          else queuedEvents.push(tagged);
           const eventName = value.hook_event_name || value.event_name || value.event || value.type;
           if (eventName === 'Stop' || eventName === 'Interrupt') usageClient.refresh().catch(() => {});
         }
@@ -555,8 +947,26 @@ function pollEvents() {
   } catch {}
 }
 
-ipcMain.handle('whale:get-state', () => ({ preferences, usage: latestUsage }));
-ipcMain.handle('whale:refresh-usage', () => usageClient.refresh().catch(() => null));
+ipcMain.handle('whale:get-state', () => ({ preferences, usage: activeUsage(), ...agentsSummary() }));
+ipcMain.handle('whale:refresh-usage', () => {
+  const refresh = normalizeActiveAgent(preferences.activeAgent) === 'zcode'
+    ? zcodeUsageClient.refresh()
+    : usageClient.refresh();
+  return refresh.catch(() => null);
+});
+ipcMain.handle('whale:switch-agent', (_event, agentId) => {
+  const next = normalizeActiveAgent(agentId);
+  preferences.activeAgent = next;
+  savePreferences();
+  sendAgents();
+  sendUsage(activeUsage());
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('whale:agent-changed', { activeAgent: next, name: agents[next].name });
+  }
+  if (next === 'zcode') zcodeUsageClient.refresh().catch(() => {});
+  else usageClient.refresh().catch(() => {});
+  return agentsSummary();
+});
 ipcMain.handle('whale:save-preferences', (_event, next) => {
   const oldScale = preferences.scale;
   const oldAlwaysOnTop = preferences.alwaysOnTop;
@@ -566,6 +976,8 @@ ipcMain.handle('whale:save-preferences', (_event, next) => {
   preferences.touchSound = normalizeTouchSound(preferences.touchSound || preferences.sound);
   preferences.volume = Math.min(1, Math.max(0, Number(preferences.volume) || 0));
   preferences.alwaysOnTop = preferences.alwaysOnTop !== false;
+  preferences.activeAgent = normalizeActiveAgent(preferences.activeAgent);
+  preferences.lowBalanceThreshold = Math.min(90, Math.max(0, Number(preferences.lowBalanceThreshold) || 0));
   preferences.easterEggChance = Math.min(1, Math.max(0, Number(preferences.easterEggChance) || defaults.easterEggChance));
   if (Array.isArray(preferences.easterEggLines)) {
     preferences.easterEggLines = preferences.easterEggLines
@@ -647,6 +1059,8 @@ if (!dragTestPath && !app.requestSingleInstanceLock()) {
     try { eventOffset = Math.max(0, fs.statSync(eventsFile).size - 65536); } catch { eventOffset = 0; }
     createWindow();
     usageClient.start();
+    zcodeUsageClient.start();
+    zcodeWatcher.start();
     heartbeatTimer = setInterval(() => {
       try { fs.writeFileSync(heartbeatFile, String(Date.now()), 'utf8'); } catch {}
     }, 2000);
@@ -661,5 +1075,7 @@ app.on('before-quit', () => {
   clearInterval(eventTimer);
   clearTimeout(moveSaveTimer);
   usageClient.stop();
+  zcodeUsageClient.stop();
+  zcodeWatcher.stop();
   try { fs.unlinkSync(heartbeatFile); } catch {}
 });

@@ -13,8 +13,10 @@ const controls = {
   touchSound: document.getElementById('touchSound'),
   volume: document.getElementById('volume'),
   alwaysOnTop: document.getElementById('alwaysOnTop'),
-  notifyOnStop: document.getElementById('notifyOnStop')
+  notifyOnStop: document.getElementById('notifyOnStop'),
+  lowBalanceThreshold: document.getElementById('lowBalanceThreshold')
 };
+const agentSelect = document.getElementById('agentSelect');
 
 const DEFAULT_EGGS = [
   '不知道用户有什么用，先养着吧～',
@@ -51,6 +53,9 @@ const DEFAULT_EGGS = [
 
 let preferences = {};
 let usage = null;
+let agent = 'codex';
+let agentsInfo = null;
+let lowWarned = { codex: null, zcode: null };
 let viewMode = 'idle';
 let bubbleTimer = null;
 let dragging = false;
@@ -63,6 +68,10 @@ let visualLockUntil = 0;
 let touchGesture = null;
 let turnBaseline = null;
 let completionState = null;
+
+function isZcode() {
+  return agent === 'zcode';
+}
 
 function remaining(windowValue) {
   return windowValue && Number.isFinite(windowValue.remainingPercent)
@@ -101,6 +110,42 @@ function resetText(windowValue) {
   return `${new Intl.DateTimeFormat('zh-CN', options).format(date)} 重置`;
 }
 
+function zcodeBucketDetail(bucket) {
+  if (!bucket) return '';
+  const parts = [];
+  if (Number.isFinite(bucket.remainingUnits) && Number.isFinite(bucket.totalUnits)) {
+    parts.push(`剩余 ${formatTokens(bucket.remainingUnits)} / ${formatTokens(bucket.totalUnits)}`);
+  }
+  parts.push(resetText(bucket));
+  return parts.join(' · ');
+}
+
+function todayByModelText(value) {
+  const byModel = value?.todayByModel;
+  if (!byModel || typeof byModel !== 'object') return '';
+  const parts = Object.entries(byModel)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([model, tokens]) => `${model}: ${formatTokens(tokens)}`);
+  return parts.join(' · ');
+}
+
+function renderTodayUsage() {
+  viewMode = 'today';
+  bubble.classList.remove('egg');
+  bubble.classList.add('open');
+  label.textContent = 'ZCode · 今日已用';
+  const total = Number.isFinite(usage?.todayTokens) ? usage.todayTokens : null;
+  amount.textContent = total != null ? formatTokens(total) : '--';
+  const breakdown = todayByModelText(usage);
+  const agentInfo = agentsInfo?.agents?.find((entry) => entry.id === 'zcode');
+  detail.textContent = breakdown || (agentInfo && agentInfo.available === false
+    ? agentInfo.reason || 'ZCode 不可用'
+    : '正在统计本机会话用量…');
+  amount.classList.remove('warn', 'danger');
+  scheduleHide();
+}
+
 function hideBubble() {
   clearTimeout(bubbleTimer);
   viewMode = 'idle';
@@ -121,9 +166,19 @@ function renderAllowance(kind) {
   viewMode = kind;
   bubble.classList.remove('egg');
   bubble.classList.add('open');
-  label.textContent = isPrimary ? 'Codex · 5小时' : 'Codex · 每周';
-  amount.textContent = value == null ? '--%' : `${value}%`;
-  detail.textContent = value == null ? '正在读取套餐用量…' : resetText(windowValue);
+  if (isZcode()) {
+    label.textContent = `ZCode · ${windowValue?.name || (isPrimary ? '主额度' : '额度')}`;
+    amount.textContent = value == null ? '--%' : `${value}%`;
+    const agentInfo = agentsInfo?.agents?.find((entry) => entry.id === 'zcode');
+    if (value == null && usage?.error) detail.textContent = usage.error;
+    else if (value == null && agentInfo && agentInfo.available === false) {
+      detail.textContent = agentInfo.reason || 'ZCode 登录已过期，请打开 ZCode 重新登录';
+    } else detail.textContent = value == null ? '正在读取账户额度…' : zcodeBucketDetail(windowValue);
+  } else {
+    label.textContent = isPrimary ? 'Codex · 5小时' : 'Codex · 每周';
+    amount.textContent = value == null ? '--%' : `${value}%`;
+    detail.textContent = value == null ? '正在读取套餐用量…' : resetText(windowValue);
+  }
   amount.classList.toggle('warn', value != null && value <= 30 && value > 10);
   amount.classList.toggle('danger', value != null && value <= 10);
   scheduleHide();
@@ -262,16 +317,27 @@ function renderCompletionUsage(state) {
     : after.todayTokens != null
       ? `今日 ${formatTokens(after.todayTokens)} tokens`
       : 'token 计数暂不可用';
-  showMessage(
-    '任务结束 · 5小时剩余',
-    after.primaryRemaining != null ? `${after.primaryRemaining}%` : '--%',
-    `${percent != null ? `本轮 -${percent}% · ` : ''}${tokenText}`,
-    6500
-  );
+  if (state.agent === 'zcode') {
+    const bucket = usage?.primary;
+    showMessage(
+      `任务结束 · ${bucket?.name || '额度'}剩余`,
+      after.primaryRemaining != null ? `${after.primaryRemaining}%` : '--%',
+      `${percent != null ? `本轮 -${percent}% · ` : ''}${tokenText}`,
+      6500
+    );
+  } else {
+    showMessage(
+      '任务结束 · 5小时剩余',
+      after.primaryRemaining != null ? `${after.primaryRemaining}%` : '--%',
+      `${percent != null ? `本轮 -${percent}% · ` : ''}${tokenText}`,
+      6500
+    );
+  }
 }
 
 function showCompletionUsage(event) {
   completionState = {
+    agent: event?.agent || 'codex',
     before: turnBaseline || usageSnapshot(usage),
     eventTokens: tokenCountFromEvent(event)
   };
@@ -292,14 +358,17 @@ function eventName(value) {
 }
 
 function handleCodexEvent(value) {
+  const eventAgent = value?.agent || 'codex';
+  if (eventAgent !== agent) return;
   const name = eventName(value);
+  const agentName = isZcode() ? 'ZCode' : 'Codex';
   if (name === 'UserPromptSubmit') {
     completionState = null;
     turnBaseline = usageSnapshot(usage);
-    showMessage('Codex', '工作中…', '鲸鱼正在帮你处理任务', 2600);
+    showMessage(agentName, '工作中…', '鲸鱼正在帮你处理任务', 2600);
     play('duckPress');
   } else if (name === 'PermissionRequest') {
-    showMessage('Codex', '请确认', '任务正在等待你的操作', 0);
+    showMessage(agentName, '请确认', '任务正在等待你的操作', 0);
     play('duckRelease');
   } else if (name === 'PreToolUse') {
     if (!turnBaseline) turnBaseline = usageSnapshot(usage);
@@ -311,7 +380,7 @@ function handleCodexEvent(value) {
     else api.refreshUsage();
     play('fx1Press');
   } else if (name === 'Interrupt') {
-    showMessage('Codex', '已停止', '任务已被中断', 3200);
+    showMessage(agentName, '已停止', '任务已被中断', 3200);
     play('fx1Release');
     setTimeout(() => api.refreshUsage(), 450);
   } else if (name === 'SessionStart') {
@@ -327,7 +396,8 @@ function saveControls() {
     touchSound: controls.touchSound.value,
     volume: Number(controls.volume.value),
     alwaysOnTop: controls.alwaysOnTop.checked,
-    notifyOnStop: controls.notifyOnStop.checked
+    notifyOnStop: controls.notifyOnStop.checked,
+    lowBalanceThreshold: Number(controls.lowBalanceThreshold.value)
   };
   if (Number(preferences.scale) !== previousScale) visualLockUntil = 0;
   api.savePreferences(preferences);
@@ -339,6 +409,8 @@ function applyPreferences() {
   controls.volume.value = preferences.volume ?? .65;
   controls.alwaysOnTop.checked = preferences.alwaysOnTop !== false;
   controls.notifyOnStop.checked = preferences.notifyOnStop !== false;
+  controls.lowBalanceThreshold.value = String(preferences.lowBalanceThreshold ?? 20);
+  if (agentSelect) agentSelect.value = agent;
   eggLines.value = (preferences.easterEggLines?.length ? preferences.easterEggLines : DEFAULT_EGGS).join('\n');
   hideBubble();
 }
@@ -440,7 +512,10 @@ bubble.addEventListener('click', () => {
     else renderAllowance('secondary');
   } else if (viewMode === 'egg') {
     renderAllowance('secondary');
-  } else if (viewMode === 'secondary' || viewMode === 'message') {
+  } else if (viewMode === 'secondary') {
+    if (isZcode()) renderTodayUsage();
+    else hideBubble();
+  } else if (viewMode === 'today' || viewMode === 'message') {
     hideBubble();
   }
   play('fx1Press');
@@ -471,15 +546,66 @@ window.addEventListener('keydown', (event) => {
 
 Object.values(controls).forEach((control) => control.addEventListener('change', saveControls));
 controls.touchSound.addEventListener('change', previewTouchSound);
+if (agentSelect) {
+  agentSelect.addEventListener('change', () => {
+    if (!agentSelect.value || agentSelect.value === agent) return;
+    agent = agentSelect.value;
+    hideBubble();
+    usage = null;
+    turnBaseline = null;
+    completionState = null;
+    renderAllowance('primary');
+    api.switchAgent(agentSelect.value).catch(() => {});
+  });
+}
 document.getElementById('refresh').addEventListener('click', () => api.refreshUsage());
 document.getElementById('quit').addEventListener('click', () => api.quit());
 
+function checkLowBalance() {
+  const threshold = Number(preferences.lowBalanceThreshold ?? 20);
+  const value = remaining(usage?.primary);
+  if (!(threshold > 0) || value == null || value > threshold) {
+    lowWarned[agent] = value;
+    return;
+  }
+  const previous = lowWarned[agent];
+  lowWarned[agent] = value;
+  const crossedDown = previous == null || previous > threshold;
+  const warnedRecently = lowWarned.agent === agent && Date.now() - (lowWarned.at || 0) < 10 * 60 * 1000;
+  if (!crossedDown && warnedRecently) return;
+  lowWarned.agent = agent;
+  lowWarned.at = Date.now();
+  const agentName = isZcode() ? 'ZCode' : 'Codex';
+  showMessage('余额预警', `${value}%`, `${agentName} 剩余额度不足 ${threshold}%`, 8000);
+  amount.classList.add('danger');
+  play('duckRelease');
+}
+
 api.onUsage((value) => {
   usage = value;
+  checkLowBalance();
   if (completionState && viewMode === 'message') renderCompletionUsage(completionState);
   else if (viewMode === 'primary' || viewMode === 'secondary') renderAllowance(viewMode);
+  else if (viewMode === 'today') renderTodayUsage();
 });
 api.onCodexEvent(handleCodexEvent);
+api.onAgents((value) => {
+  agentsInfo = value;
+  if (agentSelect && value?.activeAgent && value.activeAgent !== agent) {
+    agent = value.activeAgent;
+    agentSelect.value = agent;
+    hideBubble();
+  }
+});
+api.onAgentChanged((value) => {
+  if (value?.activeAgent) {
+    agent = value.activeAgent;
+    if (agentSelect) agentSelect.value = agent;
+    turnBaseline = null;
+    completionState = null;
+    renderAllowance('primary');
+  }
+});
 api.onSide((side) => {
   widget.classList.toggle('left', side === 'left');
   widget.classList.toggle('right', side !== 'left');
@@ -488,6 +614,8 @@ api.onSide((side) => {
 api.getState().then((state) => {
   preferences = state.preferences || {};
   usage = state.usage || null;
+  if (state.activeAgent) agent = state.activeAgent;
+  agentsInfo = { activeAgent: state.activeAgent, agents: state.agents };
   applyPreferences();
   setTimeout(() => api.refreshUsage(), 100);
 });
