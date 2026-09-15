@@ -183,6 +183,14 @@ function widgetSize() {
   return Math.round(250 * Math.min(2.5, Math.max(0.6, Number(preferences.scale) || 1.5)));
 }
 
+// Keep the native overlay compact enough that it cannot cover the desktop,
+// while leaving enough room for the upstream menu to open above the whale.
+// The whale itself remains fixed to the canvas corner by the upstream UI.
+const DESKTOP_CANVAS_SIZE = 720;
+function windowCanvasSize() {
+  return Math.max(DESKTOP_CANVAS_SIZE, widgetSize());
+}
+
 function currentDisplay() {
   return screen.getDisplayNearestPoint({
     x: Number.isFinite(preferences.x) ? preferences.x : screen.getPrimaryDisplay().workArea.x,
@@ -213,17 +221,25 @@ function applyAlwaysOnTop() {
 }
 
 function createWindow() {
-  // The upstream widget owns its own fixed-position root and full feature UI.
-  // Give it a transparent desktop-sized canvas so its drag/snap/customization
-  // code can work across the entire work area instead of being clipped to a
-  // 250px Electron child window.
+  // The upstream widget owns its own fixed-position root and feature UI. Use a
+  // bounded canvas instead of a desktop-sized transparent window: a full-screen
+  // layered window can interfere with Codex's compositor/focus even when its
+  // mouse events are ignored.
+  const size = windowCanvasSize();
   const area = currentDisplay().workArea;
+  const fallbackX = area.x + area.width - size;
+  const fallbackY = area.y + area.height - size;
+  const position = clampPosition(
+    Number.isFinite(preferences.x) ? preferences.x : fallbackX,
+    Number.isFinite(preferences.y) ? preferences.y : fallbackY,
+    size
+  );
 
   win = new BrowserWindow({
-    x: area.x,
-    y: area.y,
-    width: area.width,
-    height: area.height,
+    x: position.x,
+    y: position.y,
+    width: size,
+    height: size,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -1114,7 +1130,7 @@ ipcMain.handle('whale:save-preferences', (_event, next) => {
   if (!preferences.easterEggLines?.length) preferences.easterEggLines = [...defaultEasterEggLines];
   savePreferences();
   if (win && preferences.scale !== oldScale) {
-    const size = widgetSize();
+    const size = windowCanvasSize();
     const bounds = win.getBounds();
     const position = clampPosition(bounds.x + bounds.width - size, bounds.y + bounds.height - size, size);
     win.setBounds({ ...position, width: size, height: size }, true);
