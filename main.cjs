@@ -245,6 +245,10 @@ function createWindow() {
   applyAlwaysOnTop();
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.setIgnoreMouseEvents(true, { forward: true });
+  // A desktop overlay must never become the active application just because it
+  // exists. The renderer enables focus briefly while a menu/input is under the
+  // pointer, then returns to this passive state when the pointer leaves.
+  win.setFocusable(false);
   win.loadURL(`http://127.0.0.1:${widgetPort}/`);
   win.webContents.on('did-finish-load', () => {
     rendererReady = true;
@@ -1120,7 +1124,13 @@ ipcMain.handle('whale:save-preferences', (_event, next) => {
   return preferences;
 });
 ipcMain.on('whale:set-interactive', (_event, interactive) => {
-  if (win && !win.isDestroyed()) win.setIgnoreMouseEvents(!interactive, { forward: true });
+  if (win && !win.isDestroyed()) {
+    win.setIgnoreMouseEvents(!interactive, { forward: true });
+    win.setFocusable(Boolean(interactive));
+  }
+});
+ipcMain.on('whale:set-focusable', (_event, focusable) => {
+  if (win && !win.isDestroyed()) win.setFocusable(Boolean(focusable));
 });
 ipcMain.on('whale:drag-begin', (_event, point) => {
   if (!win || !Number.isFinite(point?.screenX) || !Number.isFinite(point?.screenY)) return;

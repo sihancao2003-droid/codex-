@@ -7,7 +7,9 @@
     return rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
   }
   function hit(x, y) {
-    const selectors = ['.dshwv-root', '.dshwv-menu', '.dshwv-pop-open', '.dshwv-mask', '.dshwv-resmask', '.dshwv-usage-mask', '.dshwv-rolelist', '.dshwv-audiolist', '.dshwv-rgbmenu'];
+    // Do not use .dshwv-root here: it is a transparent square around the
+    // whale and would make that whole square an invisible click shield.
+    const selectors = ['.dshwv-img', '.dshwv-gif', '.dshwv-text', '.dshwv-pop-open', '.dshwv-menu', '.dshwv-mask', '.dshwv-resmask', '.dshwv-usage-mask', '.dshwv-rolelist', '.dshwv-audiolist', '.dshwv-rgbmenu'];
     return selectors.some((selector) => Array.from(document.querySelectorAll(selector)).some((node) => {
       if (!node || getComputedStyle(node).display === 'none' || getComputedStyle(node).visibility === 'hidden') return false;
       return rectContains(node.getBoundingClientRect(), x, y);
@@ -18,10 +20,11 @@
     if (next === interactive) return;
     interactive = next;
     api.setInteractive(!next);
+    api.setFocusable(next);
   }
   document.addEventListener('mousemove', (event) => update(event.clientX, event.clientY), true);
   document.addEventListener('pointermove', (event) => update(event.clientX, event.clientY), true);
-  window.addEventListener('blur', () => { interactive = false; api.setInteractive(true); });
+  window.addEventListener('blur', () => { interactive = false; api.setInteractive(true); api.setFocusable(false); });
 
   const style = document.createElement('style');
   style.textContent = '.codex-whale-status{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(8px);opacity:0;pointer-events:none;z-index:10020;max-width:min(420px,calc(100vw - 40px));padding:8px 14px;border-radius:12px;background:rgba(32,49,112,.92);color:#fff;font:600 13px/1.35 system-ui,sans-serif;text-align:center;transition:opacity .18s ease,transform .18s ease;white-space:pre-wrap}.codex-whale-status.open{opacity:1;transform:translateX(-50%) translateY(0)}';

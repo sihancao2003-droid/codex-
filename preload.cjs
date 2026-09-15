@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('codexWhale', {
   savePreferences: (preferences) => ipcRenderer.invoke('whale:save-preferences', preferences),
   switchAgent: (agentId) => ipcRenderer.invoke('whale:switch-agent', agentId),
   setInteractive: (interactive) => ipcRenderer.send('whale:set-interactive', Boolean(interactive)),
+  setFocusable: (focusable) => ipcRenderer.send('whale:set-focusable', Boolean(focusable)),
   beginDrag: (point) => ipcRenderer.send('whale:drag-begin', point),
   moveDrag: (point) => ipcRenderer.send('whale:drag-move', point),
   endDrag: () => ipcRenderer.send('whale:drag-end'),

@@ -583,7 +583,7 @@ try {
   if (initRoleId && initRoleId !== 'default') initRoleUrl = '/dsh-whale/role-image.png?id=' + encodeURIComponent(initRoleId)
 } catch (err) {}
 img.src = initRoleUrl
-img.alt = 'DeepSeek 余额'
+img.alt = 'Codex / ZCode 余额'
 img.draggable = false
 
 var menuBtn = document.createElement('button')
@@ -4656,7 +4656,7 @@ function bubbleDefaultFirstModules() {
   return [
     {
       type: "text",
-      text: "DeepSeek 余额",
+      text: "Codex / ZCode 余额",
       size: 8,
       bold: true,
       rgb: "",
@@ -5146,7 +5146,7 @@ var BUBBLE_DEFAULT_ITEMS = [
         "modules":  [
                         {
                             "type":  "text",
-                            "text":  "DeepSeek 余额",
+                            "text":  "Codex / ZCode 余额",
                             "size":  8,
                             "bold":  true,
                             "rgb":  "",
@@ -9659,7 +9659,7 @@ var textBox = document.createElement('div')
 textBox.className = 'dshwv-text'
 var labelEl = document.createElement('div')
 labelEl.className = 'dshwv-label'
-labelEl.textContent = 'DeepSeek 余额'
+labelEl.textContent = 'Codex / ZCode 余额'
 var amountEl = document.createElement('div')
 amountEl.className = 'dshwv-amount'
 var hintEl = document.createElement('div')
@@ -9984,7 +9984,7 @@ function restoreBubbleLines() {
   // 后续 setHint 首次直写分支不碰 opacity → 今日已用整行透明消失。
   labelEl.style.display = ''
   labelEl.className = 'dshwv-label'
-  labelEl.textContent = 'DeepSeek 余额'
+  labelEl.textContent = 'Codex / ZCode 余额'
   labelEl.style.color = ''
   labelEl.style.opacity = ''
   amountEl.style.display = ''
