@@ -1006,18 +1006,17 @@ function readZCodeTodayUsage() {
 class ZcodeActivityWatcher {
   constructor() {
     this.sizes = new Map();
-    this.idle = true;
-    this.lastAppendAt = 0;
-    this.taskTokens = 0;
     this.timer = null;
-    this.stopTimer = null;
   }
 
   snapshot() {
     const sizes = new Map();
     try {
       for (const name of fs.readdirSync(zcodeRolloutDir)) {
-        if (!/^model-io-.*\.jsonl$/.test(name)) continue;
+        // Subagent rollouts contain many internal model calls for one user
+        // task. They are useful for token accounting, but must not be treated
+        // as separate user turns or they produce repeated completion bubbles.
+        if (!/^model-io-sess_[0-9a-f-]+\.jsonl$/i.test(name)) continue;
         try { sizes.set(name, fs.statSync(path.join(zcodeRolloutDir, name)).size); } catch {}
       }
     } catch {}
@@ -1031,9 +1030,7 @@ class ZcodeActivityWatcher {
 
   poll() {
     const sizes = this.snapshot();
-    let appended = 0;
-    let appendedTokens = 0;
-    let lastRecord = null;
+    const completedRecords = [];
     for (const [name, size] of sizes) {
       const previous = this.sizes.get(name) ?? 0;
       if (size <= previous) continue;
@@ -1051,31 +1048,25 @@ class ZcodeActivityWatcher {
         if (!trimmed || trimmed.startsWith('{') === false) continue;
         let record;
         try { record = JSON.parse(trimmed); } catch { continue; }
-        appended += 1;
         const usage = record?.response?.usage || record?.usage;
         const tokens = Number(usage?.totalTokens ?? usage?.total_tokens);
-        if (Number.isFinite(tokens) && tokens > 0) appendedTokens += tokens;
-        lastRecord = record;
+        if (Number.isFinite(tokens) && tokens > 0) {
+          completedRecords.push({ record, tokens });
+        }
       }
     }
     for (const name of this.sizes.keys()) if (!sizes.has(name)) this.sizes.delete(name);
-    if (appended > 0) {
-      const model = lastRecord?.model?.modelId || null;
-      if (this.idle) {
-        this.idle = false;
-        this.taskTokens = 0;
-        this.emit('UserPromptSubmit', { model });
-      }
-      this.taskTokens += appendedTokens;
-      this.lastAppendAt = Date.now();
-      this.emit('PreToolUse', { model });
-      clearTimeout(this.stopTimer);
-      this.stopTimer = setTimeout(() => {
-        if (this.idle) return;
-        this.idle = true;
-        this.emit('Stop', { model, usage: { total_tokens: this.taskTokens } });
-        zcodeUsageClient.refresh().catch(() => {});
-      }, 6000);
+    // Each top-level completed model-io record represents one ZCode turn.
+    // Emit one lifecycle sequence per record instead of using a short idle
+    // timeout: a single task can have long gaps between model calls, while
+    // subagent calls have already been excluded above.
+    for (const { record, tokens } of completedRecords) {
+      const model = record?.model?.modelId || null;
+      const turnId = record?.requestId || `${model || 'zcode'}:${record?.completedAt || Date.now()}`;
+      this.emit('UserPromptSubmit', { model, turnId });
+      this.emit('PreToolUse', { model, turnId });
+      this.emit('Stop', { model, turnId, usage: { total_tokens: tokens } });
+      zcodeUsageClient.refresh().catch(() => {});
     }
   }
 
@@ -1089,7 +1080,6 @@ class ZcodeActivityWatcher {
 
   stop() {
     clearInterval(this.timer);
-    clearTimeout(this.stopTimer);
   }
 }
 

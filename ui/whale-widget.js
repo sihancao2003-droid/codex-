@@ -14058,6 +14058,13 @@ window.__codexWhaleHooks = {
     try {
       var kind = event && (event.hook_event_name || event.event_name || event.event || event.type)
       if (kind !== 'Stop' || !turnCostOn) return
+      // Guard the cost bubble against duplicate delivery of the same ZCode
+      // request by the activity watcher and the renderer refresh path.
+      var stopId = event && (event.turnId || event.requestId)
+      if (event && event.agent === 'zcode' && stopId) {
+        if (window.__codexWhaleLastZcodeStopId === String(stopId)) return
+        window.__codexWhaleLastZcodeStopId = String(stopId)
+      }
       window.__codexWhaleTokenMode = true
       playTaskEndSound()
       var u = event && event.usage
