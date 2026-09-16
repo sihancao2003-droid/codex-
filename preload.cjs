@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('codexWhale', {
   switchAgent: (agentId) => ipcRenderer.invoke('whale:switch-agent', agentId),
   setInteractive: (interactive) => ipcRenderer.send('whale:set-interactive', Boolean(interactive)),
   setFocusable: (focusable) => ipcRenderer.send('whale:set-focusable', Boolean(focusable)),
+  reportHitRegions: (payload) => ipcRenderer.send('whale:hit-regions', payload),
   beginDrag: (point) => ipcRenderer.send('whale:drag-begin', point),
   moveDrag: (point) => ipcRenderer.send('whale:drag-move', point),
   endDrag: () => ipcRenderer.send('whale:drag-end'),

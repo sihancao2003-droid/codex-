@@ -112,6 +112,10 @@ let drag = null;
 let heartbeatTimer;
 let eventTimer;
 let moveSaveTimer;
+let hitTestTimer;
+let hitRegions = [];
+let rendererDragging = false;
+let overlayInteractive = false;
 let rendererReady = false;
 const queuedEvents = [];
 let widgetServer;
@@ -220,6 +224,34 @@ function applyAlwaysOnTop() {
   if (enabled) win.moveTop();
 }
 
+function setOverlayInteractive(interactive) {
+  const next = Boolean(interactive);
+  if (!win || win.isDestroyed() || next === overlayInteractive) return;
+  overlayInteractive = next;
+  win.setIgnoreMouseEvents(!next, { forward: true });
+  win.setFocusable(next);
+}
+
+function pointInRegion(point, region) {
+  return point.x >= region.x && point.x <= region.x + region.width &&
+    point.y >= region.y && point.y <= region.y + region.height;
+}
+
+function updateNativeHitTest() {
+  if (!win || win.isDestroyed()) return;
+  const bounds = win.getBounds();
+  const cursor = screen.getCursorScreenPoint();
+  const localPoint = { x: cursor.x - bounds.x, y: cursor.y - bounds.y };
+  const inside = rendererDragging || hitRegions.some((region) => pointInRegion(localPoint, region));
+  setOverlayInteractive(inside);
+}
+
+function startNativeHitTest() {
+  clearInterval(hitTestTimer);
+  hitTestTimer = setInterval(updateNativeHitTest, 35);
+  updateNativeHitTest();
+}
+
 function createWindow() {
   // The upstream widget owns its own fixed-position root and feature UI. Use a
   // bounded canvas instead of a desktop-sized transparent window: a full-screen
@@ -265,6 +297,7 @@ function createWindow() {
   // exists. The renderer enables focus briefly while a menu/input is under the
   // pointer, then returns to this passive state when the pointer leaves.
   win.setFocusable(false);
+  startNativeHitTest();
   win.loadURL(`http://127.0.0.1:${widgetPort}/`);
   win.webContents.on('did-finish-load', () => {
     rendererReady = true;
@@ -1140,13 +1173,26 @@ ipcMain.handle('whale:save-preferences', (_event, next) => {
   return preferences;
 });
 ipcMain.on('whale:set-interactive', (_event, interactive) => {
-  if (win && !win.isDestroyed()) {
-    win.setIgnoreMouseEvents(!interactive, { forward: true });
-    win.setFocusable(Boolean(interactive));
-  }
+  setOverlayInteractive(interactive);
 });
 ipcMain.on('whale:set-focusable', (_event, focusable) => {
   if (win && !win.isDestroyed()) win.setFocusable(Boolean(focusable));
+});
+ipcMain.on('whale:hit-regions', (_event, payload) => {
+  if (!payload || !Array.isArray(payload.regions)) return;
+  hitRegions = payload.regions
+    .map((region) => ({
+      x: Number(region?.x),
+      y: Number(region?.y),
+      width: Number(region?.width),
+      height: Number(region?.height)
+    }))
+    .filter((region) => Number.isFinite(region.x) && Number.isFinite(region.y) &&
+      Number.isFinite(region.width) && Number.isFinite(region.height) &&
+      region.width > 0 && region.height > 0)
+    .slice(0, 32);
+  rendererDragging = Boolean(payload.dragging);
+  updateNativeHitTest();
 });
 ipcMain.on('whale:drag-begin', (_event, point) => {
   if (!win || !Number.isFinite(point?.screenX) || !Number.isFinite(point?.screenY)) return;
@@ -1228,6 +1274,7 @@ app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => {
   clearInterval(heartbeatTimer);
   clearInterval(eventTimer);
+  clearInterval(hitTestTimer);
   clearTimeout(moveSaveTimer);
   usageClient.stop();
   zcodeUsageClient.stop();

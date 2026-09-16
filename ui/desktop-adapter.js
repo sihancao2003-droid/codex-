@@ -15,6 +15,29 @@
       return rectContains(node.getBoundingClientRect(), x, y);
     }));
   }
+  function reportHitRegions() {
+    const selectors = [
+      '.dshwv-img',
+      '.dshwv-pop.dshwv-pop-open',
+      '.dshwv-menu.dshwv-menu-open',
+      '.dshwv-menu-btn.dshwv-menu-btn-visible',
+      '.dshwv-mask', '.dshwv-resmask', '.dshwv-usage-mask',
+      '.dshwv-rolelist', '.dshwv-audiolist', '.dshwv-rgbmenu'
+    ];
+    const regions = [];
+    for (const selector of selectors) {
+      for (const node of document.querySelectorAll(selector)) {
+        const style = getComputedStyle(node);
+        const structuralHit = selector === '.dshwv-img' || selector === '.dshwv-pop.dshwv-pop-open';
+        if (style.display === 'none' || style.visibility === 'hidden' || (!structuralHit && style.pointerEvents === 'none')) continue;
+        const rect = node.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          regions.push({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+        }
+      }
+    }
+    api.reportHitRegions({ regions, dragging: Boolean(document.querySelector('.dshwv-root.dshwv-dragging')) });
+  }
   function update(x, y) {
     const next = hit(x, y);
     if (next === interactive) return;
@@ -25,6 +48,10 @@
   document.addEventListener('mousemove', (event) => update(event.clientX, event.clientY), true);
   document.addEventListener('pointermove', (event) => update(event.clientX, event.clientY), true);
   window.addEventListener('blur', () => { interactive = false; api.setInteractive(true); api.setFocusable(false); });
+  setInterval(reportHitRegions, 100);
+  const hitRegionObserver = new MutationObserver(reportHitRegions);
+  hitRegionObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+  setTimeout(reportHitRegions, 50);
 
   const style = document.createElement('style');
   style.textContent = '.codex-whale-status{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(8px);opacity:0;pointer-events:none;z-index:10020;max-width:min(420px,calc(100vw - 40px));padding:8px 14px;border-radius:12px;background:rgba(32,49,112,.92);color:#fff;font:600 13px/1.35 system-ui,sans-serif;text-align:center;transition:opacity .18s ease,transform .18s ease;white-space:pre-wrap}.codex-whale-status.open{opacity:1;transform:translateX(-50%) translateY(0)}';
