@@ -9,7 +9,7 @@
   function hit(x, y) {
     // Do not use .dshwv-root here: it is a transparent square around the
     // whale and would make that whole square an invisible click shield.
-    const selectors = ['.dshwv-img', '.dshwv-gif', '.dshwv-text', '.dshwv-pop-open', '.dshwv-menu', '.dshwv-mask', '.dshwv-resmask', '.dshwv-usage-mask', '.dshwv-rolelist', '.dshwv-audiolist', '.dshwv-rgbmenu'];
+    const selectors = ['.dshwv-img', '.dshwv-gif', '.dshwv-text', '.dshwv-pop-open', '.dshwv-menu', '.dshwv-mask', '.dshwv-resmask', '.dshwv-usage-mask', '.dshwv-rolelist', '.dshwv-audiolist', '.dshwv-rgbmenu', '.dshwv-snapmask', '.dshwv-cropmask', '.dshwv-audiomask', '.dshwv-confirmmask', '.dshwv-bubmask', '.dshwv-qedit', '.dshwv-usagepanel', '.dshwv-custmenu'];
     return selectors.some((selector) => Array.from(document.querySelectorAll(selector)).some((node) => {
       if (!node || getComputedStyle(node).display === 'none' || getComputedStyle(node).visibility === 'hidden') return false;
       return rectContains(node.getBoundingClientRect(), x, y);
@@ -22,7 +22,10 @@
       '.dshwv-menu.dshwv-menu-open',
       '.dshwv-menu-btn.dshwv-menu-btn-visible',
       '.dshwv-mask', '.dshwv-resmask', '.dshwv-usage-mask',
-      '.dshwv-rolelist', '.dshwv-audiolist', '.dshwv-rgbmenu'
+      '.dshwv-rolelist', '.dshwv-audiolist', '.dshwv-rgbmenu',
+      '.dshwv-snapmask', '.dshwv-cropmask', '.dshwv-audiomask',
+      '.dshwv-confirmmask', '.dshwv-bubmask', '.dshwv-qedit',
+      '.dshwv-usagepanel', '.dshwv-custmenu'
     ];
     const regions = [];
     for (const selector of selectors) {
