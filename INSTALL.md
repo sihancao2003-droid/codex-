@@ -64,6 +64,15 @@ cd codex-
 npm install
 ```
 
+如果 `npm install` 长时间卡住（Electron 二进制默认从 github.com 下载，国内网络可能很慢），先设置国内镜像再安装：
+
+```powershell
+$env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+npm install
+```
+
+若已经装完但缺少二进制（`node_modules\electron\dist\electron.exe` 不存在），在设置镜像后于项目目录执行 `node node_modules\electron\install.js` 补下载即可。
+
 ### 3. 启动挂件
 
 ```powershell
